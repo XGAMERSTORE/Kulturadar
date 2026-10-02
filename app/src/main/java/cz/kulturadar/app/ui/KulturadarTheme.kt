@@ -5,22 +5,39 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val Green = Color(0xFF55E68A)
+// Kulturadar palette inspired by the app icon: deep black-green surfaces + neon emerald radar glow.
+val RadarEmerald = Color(0xFF4DFF9A)
+val RadarEmeraldBright = Color(0xFF76FFB3)
+val RadarMint = Color(0xFFB5FFD5)
+val RadarBlack = Color(0xFF010705)
+val RadarSurface = Color(0xFF06130E)
+val RadarSurfaceRaised = Color(0xFF0B2117)
+val RadarOutline = Color(0xFF1F5B3D)
+
 private val Dark = darkColorScheme(
-    primary = Green,
-    onPrimary = Color(0xFF05210F),
-    primaryContainer = Green.copy(alpha = .20f),
-    onPrimaryContainer = Color(0xFFD7FFE2),
-    secondary = Color(0xFF9FE6B7),
-    background = Color(0xFF020604),
-    onBackground = Color(0xFFF2F7F3),
-    surface = Color(0xFF0B1710),
-    onSurface = Color(0xFFF2F7F3),
-    surfaceVariant = Color(0xFF12241A),
-    onSurfaceVariant = Color(0xFFAAB8AE),
-    outline = Color(0xFF294535),
-    error = Color(0xFFFF6F83)
+    primary = RadarEmerald,
+    onPrimary = Color(0xFF001B0D),
+    primaryContainer = Color(0xFF0E3A24),
+    onPrimaryContainer = RadarMint,
+    secondary = RadarEmeraldBright,
+    onSecondary = Color(0xFF002312),
+    secondaryContainer = Color(0xFF103323),
+    onSecondaryContainer = Color(0xFFD7FFE7),
+    tertiary = Color(0xFF7EFBC0),
+    background = RadarBlack,
+    onBackground = Color(0xFFF2FFF7),
+    surface = RadarSurface,
+    onSurface = Color(0xFFF2FFF7),
+    surfaceVariant = RadarSurfaceRaised,
+    onSurfaceVariant = Color(0xFFB6CFC0),
+    outline = RadarOutline,
+    outlineVariant = Color(0xFF113524),
+    error = Color(0xFFFF6B82),
+    onError = Color(0xFF31000B)
 )
 
 @Composable
-fun KulturadarTheme(content: @Composable () -> Unit) = MaterialTheme(colorScheme = Dark, content = content)
+fun KulturadarTheme(content: @Composable () -> Unit) = MaterialTheme(
+    colorScheme = Dark,
+    content = content
+)
