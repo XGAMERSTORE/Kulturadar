@@ -2,6 +2,7 @@ package cz.kulturadar.app.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,7 +20,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -72,6 +72,13 @@ fun KulturadarApp() {
             settings.edit().putString("view_mode", chosen.value).apply()
         }
         return
+    }
+
+    BackHandler(enabled = selected != null || tab != Tab.DISCOVER) {
+        when {
+            selected != null -> selected = null
+            tab != Tab.DISCOVER -> tab = Tab.DISCOVER
+        }
     }
 
     val visible = remember(events, filter, tab, reloadTick) {
@@ -291,6 +298,11 @@ private fun SwipeDiscoverScreen(
 ) {
     var index by remember(events) { mutableIntStateOf(0) }
     var dragX by remember { mutableFloatStateOf(0f) }
+
+    BackHandler(enabled = index > 0) {
+        index--
+        dragX = 0f
+    }
 
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Header("Kulturadar", filter, filterOpen, loading, onRefresh, onFilterToggle, onFilter)
@@ -588,8 +600,8 @@ private fun SettingsScreen(
         }
         item { HorizontalDivider() }
         item {
-            Text("Kulturadar 1.1", fontWeight = FontWeight.Bold)
-            Text("Oba režimy používají stejné Milované/Nenáviděné, filtry a doporučení. Režim lze kdykoliv změnit.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Kulturadar 1.2", fontWeight = FontWeight.Bold)
+            Text("Oba režimy používají stejné Milované/Nenáviděné, filtry a doporučení. Systémové gesto Zpět funguje v detailech, kartách i swipe režimu.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
