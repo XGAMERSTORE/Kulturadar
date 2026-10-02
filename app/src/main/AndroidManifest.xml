@@ -3,6 +3,8 @@
     <application
         android:allowBackup="true"
         android:label="Kulturadar"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Kulturadar"
         android:usesCleartextTraffic="false">
         <activity
