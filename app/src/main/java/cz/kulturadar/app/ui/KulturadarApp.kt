@@ -53,6 +53,22 @@ fun KulturadarApp() {
     val scope = rememberCoroutineScope()
 
     val visible = remember(events, filter, tab, reloadTick) {
+        val loved = events.filter { store.get(it.id) == Reaction.LOVED }
+        val hated = events.filter { store.get(it.id) == Reaction.HATED }
+        val lovedAveragePrice = loved.mapNotNull { it.priceCzk }.takeIf { it.isNotEmpty() }?.average()
+
+        fun recommendationScore(event: CulturalEvent): Int {
+            var score = 0
+            score += loved.count { it.type == event.type } * 6
+            score += loved.count { it.city.equals(event.city, true) } * 4
+            score -= hated.count { it.type == event.type } * 4
+            score -= hated.count { it.city.equals(event.city, true) } * 2
+            if (lovedAveragePrice != null && event.priceCzk != null && kotlin.math.abs(event.priceCzk - lovedAveragePrice) <= 250) score += 2
+            if (event.priceCzk == 0) score += 1
+            if (store.get(event.id) == Reaction.HATED) score -= 100
+            return score
+        }
+
         events.filter { e ->
             val reaction = store.get(e.id)
             val tabOk = when (tab) { Tab.LOVED -> reaction == Reaction.LOVED; Tab.HATED -> reaction == Reaction.HATED; else -> true }
@@ -68,6 +84,8 @@ fun KulturadarApp() {
             val q = filter.search.trim()
             val searchOk = q.isBlank() || listOf(e.title, e.subtitle, e.venue, e.city).any { it.contains(q, true) }
             tabOk && typeOk && cityOk && freeOk && dateOk && priceOk && searchOk
+        }.let { filtered ->
+            if (tab == Tab.DISCOVER) filtered.sortedByDescending(::recommendationScore) else filtered
         }
     }
 
@@ -134,7 +152,7 @@ private fun DiscoverScreen(
         Row(Modifier.fillMaxWidth().padding(18.dp, 16.dp, 18.dp, 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(title, fontSize = 30.sp, fontWeight = FontWeight.Black)
-                Text("Akce · divadla · kina", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Celá ČR · akce · divadla · kina · koncerty", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, "Obnovit") }
             FilledTonalIconButton(onClick = onFilterToggle) { Icon(Icons.Default.Tune, "Filtry") }
@@ -158,7 +176,7 @@ private fun DiscoverScreen(
 @Composable
 private fun TypeRail(selected: EventType, onSelect: (EventType)->Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(EventType.ALL, EventType.EVENT, EventType.THEATRE, EventType.CINEMA).forEach { t ->
+        listOf(EventType.ALL, EventType.EVENT, EventType.THEATRE, EventType.CINEMA, EventType.CONCERT, EventType.EXHIBITION).forEach { t ->
             FilterChip(selected = selected == t, onClick = { onSelect(t) }, label = { Text(t.title) })
         }
     }
@@ -166,11 +184,12 @@ private fun TypeRail(selected: EventType, onSelect: (EventType)->Unit) {
 
 @Composable
 private fun FilterPanel(filter: EventFilter, onFilter: (EventFilter)->Unit) {
+    val cities = listOf("Všechna města", "Praha", "Brno", "Ostrava", "Plzeň", "Olomouc", "Liberec", "Hradec Králové", "Pardubice", "Zlín", "České Budějovice", "Opava", "Frýdek-Místek", "Karlovy Vary", "Jihlava", "Ústí nad Labem", "Tábor", "Mladá Boleslav")
     Surface(Modifier.fillMaxWidth().padding(18.dp, 8.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha=.6f), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Filtry", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Text("Město")
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Všechna města","Ostrava","Opava","Frýdek-Místek").forEach { city -> FilterChip(selected=filter.city==city,onClick={onFilter(filter.copy(city=city))},label={Text(city)}) } }
+            Text("Město · celá Česká republika")
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { cities.forEach { city -> FilterChip(selected=filter.city==city,onClick={onFilter(filter.copy(city=city))},label={Text(city)}) } }
             Text("Kdy")
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Kdykoliv","Dnes","Zítra","Tento týden").forEach { whenText -> FilterChip(selected=filter.date==whenText,onClick={onFilter(filter.copy(date=whenText))},label={Text(whenText)}) } }
             Row(verticalAlignment = Alignment.CenterVertically) { Switch(filter.freeOnly, { onFilter(filter.copy(freeOnly=it)) }); Spacer(Modifier.width(8.dp)); Text("Jen zdarma") }
@@ -179,6 +198,7 @@ private fun FilterPanel(filter: EventFilter, onFilter: (EventFilter)->Unit) {
                 Spacer(Modifier.width(12.dp))
                 OutlinedTextField(value = filter.maxPrice?.toString().orEmpty(), onValueChange = { onFilter(filter.copy(maxPrice = it.toIntOrNull())) }, keyboardOptions = KeyboardOptions(keyboardType=KeyboardType.Number), singleLine=true, suffix={Text("Kč")}, modifier=Modifier.width(150.dp))
             }
+            Text("Objevovat se učí z Milovaných a Nenáviděných a řadí podobné akce výš nebo níž.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -246,11 +266,11 @@ private fun SettingsScreen(apiKey:String,onKeyChange:(String)->Unit,onSave:()->U
     Column(modifier.fillMaxSize().padding(20.dp), verticalArrangement=Arrangement.spacedBy(18.dp)){
         Spacer(Modifier.height(4.dp));Text("Nastavení",fontSize=30.sp,fontWeight=FontWeight.Black)
         Text("Živá data",fontSize=20.sp,fontWeight=FontWeight.Bold)
-        Text("Ticketmaster je volitelný zdroj pro obecné akce. Bez klíče běží aplikace na demo datech.",color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Ticketmaster je volitelný zdroj pro obecné akce po celé České republice. Bez klíče běží aplikace na rozšířených ukázkových datech z celé ČR.",color=MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(value=apiKey,onValueChange=onKeyChange,label={Text("Ticketmaster API key")},singleLine=true,modifier=Modifier.fillMaxWidth())
         Button(onClick=onSave,modifier=Modifier.fillMaxWidth()){Icon(Icons.Default.Sync,null);Spacer(Modifier.width(8.dp));Text("Uložit a načíst živá data")}
         HorizontalDivider()
         Text("Kulturadar 1.0",fontWeight=FontWeight.Bold)
-        Text("Tmavý zeleno-černý vzhled inspirovaný Knižním radarem. Reakce se ukládají pouze v telefonu.",color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Tmavý zeleno-černý vzhled inspirovaný Knižním radarem. Milované a Nenáviděné ovlivňují pořadí doporučení v Objevovat. Reakce se ukládají pouze v telefonu.",color=MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
