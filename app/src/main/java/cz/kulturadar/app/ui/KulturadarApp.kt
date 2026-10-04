@@ -1,10 +1,12 @@
 package cz.kulturadar.app.ui
 
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -12,14 +14,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -27,7 +30,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,11 +42,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
-private enum class Tab(val label: String) { DISCOVER("Objevovat"), LOVED("Milované"), HATED("Nenáviděné"), SETTINGS("Nastavení") }
-private enum class ViewMode(val value: String, val title: String, val subtitle: String) {
-    CARDS("cards", "Přehled karet", "Více akcí pod sebou, plakáty, ceny a rychlé reakce."),
-    SWIPE("swipe", "Swipe režim", "Jedna akce v hlavní roli. Doleva nechci, doprava miluji.")
+private enum class Tab(val label: String) {
+    DISCOVER("Objevovat"), LOVED("Milované"), HATED("Nenáviděné"), SETTINGS("Nastavení")
 }
+
+private enum class ViewMode(val value: String, val title: String) {
+    CARDS("cards", "Přehled"), SWIPE("swipe", "Swipe")
+}
+
+private data class AccentChoice(val id: String, val label: String, val color: Color)
+
+private val accents = listOf(
+    AccentChoice("wine", "Vínová", Color(0xFFFF5E89)),
+    AccentChoice("green", "Zelená", Color(0xFF61F59A)),
+    AccentChoice("purple", "Fialová", Color(0xFFC985FF)),
+    AccentChoice("blue", "Modrá", Color(0xFF72A7FF)),
+    AccentChoice("red", "Červená", Color(0xFFFF6472)),
+    AccentChoice("gold", "Zlatá", Color(0xFFE4BC64))
+)
 
 @Composable
 fun KulturadarApp() {
@@ -52,9 +67,10 @@ fun KulturadarApp() {
     val repo = remember { EventRepository() }
     val store = remember { ReactionStore(context) }
     val settings = remember { context.getSharedPreferences("settings", 0) }
-
     var viewMode by remember {
-        mutableStateOf(settings.getString("view_mode", null)?.let { saved -> ViewMode.values().firstOrNull { it.value == saved } })
+        mutableStateOf(settings.getString("view_mode", "swipe")?.let { value ->
+            ViewMode.values().firstOrNull { it.value == value }
+        } ?: ViewMode.SWIPE)
     }
     var tab by remember { mutableStateOf(Tab.DISCOVER) }
     var filter by remember { mutableStateOf(EventFilter()) }
@@ -66,17 +82,10 @@ fun KulturadarApp() {
     var reloadTick by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
 
-    if (viewMode == null) {
-        ModeChooser { chosen ->
-            viewMode = chosen
-            settings.edit().putString("view_mode", chosen.value).apply()
-        }
-        return
-    }
-
-    BackHandler(enabled = selected != null || tab != Tab.DISCOVER) {
+    BackHandler(enabled = selected != null || filterOpen || tab != Tab.DISCOVER) {
         when {
             selected != null -> selected = null
+            filterOpen -> filterOpen = false
             tab != Tab.DISCOVER -> tab = Tab.DISCOVER
         }
     }
@@ -84,18 +93,15 @@ fun KulturadarApp() {
     val visible = remember(events, filter, tab, reloadTick) {
         val loved = events.filter { store.get(it.id) == Reaction.LOVED }
         val hated = events.filter { store.get(it.id) == Reaction.HATED }
-        val lovedAveragePrice = loved.mapNotNull { it.priceCzk }.takeIf { it.isNotEmpty() }?.average()
+        val averagePrice = loved.mapNotNull { it.priceCzk }.takeIf { it.isNotEmpty() }?.average()
 
-        fun recommendationScore(event: CulturalEvent): Int {
-            var score = 0
-            score += loved.count { it.type == event.type } * 6
-            score += loved.count { it.city.equals(event.city, true) } * 4
-            score -= hated.count { it.type == event.type } * 4
-            score -= hated.count { it.city.equals(event.city, true) } * 2
-            if (lovedAveragePrice != null && event.priceCzk != null && abs(event.priceCzk - lovedAveragePrice) <= 250) score += 2
-            if (event.priceCzk == 0) score += 1
-            if (store.get(event.id) == Reaction.HATED) score -= 100
-            return score
+        fun score(event: CulturalEvent): Int {
+            var value = 0
+            value += loved.count { it.type == event.type } * 6
+            value += loved.count { it.city.equals(event.city, true) } * 4
+            value -= hated.count { it.type == event.type } * 4
+            if (averagePrice != null && event.priceCzk != null && abs(event.priceCzk - averagePrice) <= 250) value += 2
+            return value
         }
 
         events.filter { e ->
@@ -117,17 +123,18 @@ fun KulturadarApp() {
             val q = filter.search.trim()
             val searchOk = q.isBlank() || listOf(e.title, e.subtitle, e.venue, e.city).any { it.contains(q, true) }
             tabOk && typeOk && cityOk && freeOk && dateOk && priceOk && searchOk
-        }.let { filtered -> if (tab == Tab.DISCOVER) filtered.sortedByDescending(::recommendationScore) else filtered }
+        }.let { if (tab == Tab.DISCOVER) it.sortedByDescending(::score) else it }
     }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .98f)) {
+            NavigationBar(containerColor = Color(0xF20A090B), tonalElevation = 0.dp) {
                 listOf(Tab.DISCOVER, Tab.LOVED, Tab.HATED, Tab.SETTINGS).forEach { item ->
                     NavigationBarItem(
                         selected = tab == item,
-                        onClick = { tab = item; selected = null },
+                        onClick = { tab = item; selected = null; filterOpen = false },
                         icon = {
                             Icon(
                                 when (item) {
@@ -138,7 +145,7 @@ fun KulturadarApp() {
                                 }, null
                             )
                         },
-                        label = { Text(item.label) }
+                        label = { Text(item.label, fontSize = 12.sp) }
                     )
                 }
             }
@@ -146,20 +153,20 @@ fun KulturadarApp() {
     ) { padding ->
         when {
             selected != null -> EventDetail(
-                selected!!,
-                store.get(selected!!.id),
+                event = selected!!,
+                reaction = store.get(selected!!.id),
                 onBack = { selected = null },
-                onReact = { r -> store.set(selected!!.id, r); reloadTick++ },
+                onReact = { store.set(selected!!.id, it); reloadTick++ },
                 modifier = Modifier.padding(padding)
             )
 
             tab == Tab.SETTINGS -> SettingsScreen(
                 apiKey = apiKey,
                 onKeyChange = { apiKey = it },
-                viewMode = viewMode!!,
-                onModeChange = { mode ->
-                    viewMode = mode
-                    settings.edit().putString("view_mode", mode.value).apply()
+                viewMode = viewMode,
+                onModeChange = {
+                    viewMode = it
+                    settings.edit().putString("view_mode", it.value).apply()
                 },
                 onSave = {
                     settings.edit().putString("tm_key", apiKey).apply()
@@ -173,15 +180,15 @@ fun KulturadarApp() {
                 modifier = Modifier.padding(padding)
             )
 
-            tab == Tab.DISCOVER && viewMode == ViewMode.SWIPE -> SwipeDiscoverScreen(
+            tab == Tab.DISCOVER && viewMode == ViewMode.SWIPE -> SwipeScreen(
                 events = visible,
                 filter = filter,
                 filterOpen = filterOpen,
                 loading = loading,
-                onReaction = { id, reaction -> store.set(id, reaction); reloadTick++ },
-                onFilterToggle = { filterOpen = !filterOpen },
+                onFilterOpen = { filterOpen = !filterOpen },
                 onFilter = { filter = it },
                 onOpen = { selected = it },
+                onReact = { id, reaction -> store.set(id, reaction); reloadTick++ },
                 onRefresh = {
                     loading = true
                     scope.launch {
@@ -193,9 +200,8 @@ fun KulturadarApp() {
                 modifier = Modifier.padding(padding)
             )
 
-            else -> DiscoverScreen(
+            else -> CardListScreen(
                 title = when (tab) {
-                    Tab.DISCOVER -> "Kulturadar"
                     Tab.LOVED -> "Milované"
                     Tab.HATED -> "Nenáviděné"
                     else -> "Kulturadar"
@@ -204,19 +210,12 @@ fun KulturadarApp() {
                 filter = filter,
                 filterOpen = filterOpen,
                 loading = loading,
-                reactionFor = store::get,
-                onReaction = { id, r -> store.set(id, r); reloadTick++ },
-                onFilterToggle = { filterOpen = !filterOpen },
+                onFilterOpen = { filterOpen = !filterOpen },
                 onFilter = { filter = it },
                 onOpen = { selected = it },
-                onRefresh = {
-                    loading = true
-                    scope.launch {
-                        val live = withContext(Dispatchers.IO) { repo.ticketmaster(apiKey, filter.city, filter.search) }
-                        events = if (live.isNotEmpty()) live else repo.demoEvents()
-                        loading = false
-                    }
-                },
+                reactionFor = store::get,
+                onReact = { id, reaction -> store.set(id, reaction); reloadTick++ },
+                onRefresh = {},
                 modifier = Modifier.padding(padding)
             )
         }
@@ -224,94 +223,80 @@ fun KulturadarApp() {
 }
 
 @Composable
-private fun ModeChooser(onChoose: (ViewMode) -> Unit) {
-    Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("Jak chceš objevovat akce?", fontSize = 32.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(10.dp))
-        Text("Vyber si styl. Později ho můžeš kdykoliv změnit v Nastavení.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(28.dp))
-
-        ModeChoiceCard(ViewMode.CARDS, Icons.Default.ViewAgenda, onChoose)
-        Spacer(Modifier.height(16.dp))
-        ModeChoiceCard(ViewMode.SWIPE, Icons.Default.Swipe, onChoose)
-    }
-}
-
-@Composable
-private fun ModeChoiceCard(mode: ViewMode, icon: androidx.compose.ui.graphics.vector.ImageVector, onChoose: (ViewMode) -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable { onChoose(mode) },
-        shape = RoundedCornerShape(26.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilledTonalIconButton(onClick = { onChoose(mode) }, modifier = Modifier.size(58.dp)) { Icon(icon, null) }
-            Spacer(Modifier.width(16.dp))
-            Column(Modifier.weight(1f)) {
-                Text(mode.title, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                Text(mode.subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Icon(Icons.Default.ChevronRight, null)
-        }
-    }
-}
-
-@Composable
-private fun DiscoverScreen(
+private fun Header(
     title: String,
-    events: List<CulturalEvent>,
     filter: EventFilter,
-    filterOpen: Boolean,
     loading: Boolean,
-    reactionFor: (String) -> Reaction,
-    onReaction: (String, Reaction) -> Unit,
-    onFilterToggle: () -> Unit,
-    onFilter: (EventFilter) -> Unit,
-    onOpen: (CulturalEvent) -> Unit,
     onRefresh: () -> Unit,
-    modifier: Modifier = Modifier
+    onFilterOpen: () -> Unit,
+    onFilter: (EventFilter) -> Unit
 ) {
-    Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Header(title, filter, filterOpen, loading, onRefresh, onFilterToggle, onFilter)
-        if (events.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Nic tu teď není. Zkus změnit filtry.") }
-        else LazyColumn(contentPadding = PaddingValues(18.dp, 8.dp, 18.dp, 110.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(events, key = { it.id }) { event -> EventCard(event, reactionFor(event.id), onReaction, onOpen) }
+    Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 34.sp, fontWeight = FontWeight.Black, letterSpacing = (-1).sp)
+                Text("Objevuj kulturu po celé ČR", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, "Obnovit") }
+            FilledTonalIconButton(onClick = onFilterOpen, modifier = Modifier.size(50.dp)) {
+                Icon(Icons.Default.Tune, "Filtry")
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        OutlinedTextField(
+            value = filter.search,
+            onValueChange = { onFilter(filter.copy(search = it)) },
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            placeholder = { Text("Hledat akci, místo, město…") },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(26.dp)
+        )
+        Spacer(Modifier.height(10.dp))
+        TypeRail(filter.type) { onFilter(filter.copy(type = it)) }
+        if (loading) {
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(Modifier.fillMaxWidth())
         }
     }
 }
 
 @Composable
-private fun SwipeDiscoverScreen(
+private fun TypeRail(selected: EventType, onSelect: (EventType) -> Unit) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(EventType.ALL, EventType.EVENT, EventType.THEATRE, EventType.CINEMA, EventType.CONCERT, EventType.EXHIBITION).forEach { type ->
+            FilterChip(selected = selected == type, onClick = { onSelect(type) }, label = { Text(type.title) })
+        }
+    }
+}
+
+@Composable
+private fun SwipeScreen(
     events: List<CulturalEvent>,
     filter: EventFilter,
     filterOpen: Boolean,
     loading: Boolean,
-    onReaction: (String, Reaction) -> Unit,
-    onFilterToggle: () -> Unit,
+    onFilterOpen: () -> Unit,
     onFilter: (EventFilter) -> Unit,
     onOpen: (CulturalEvent) -> Unit,
+    onReact: (String, Reaction) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var index by remember(events) { mutableIntStateOf(0) }
     var dragX by remember { mutableFloatStateOf(0f) }
 
-    BackHandler(enabled = index > 0) {
-        index--
-        dragX = 0f
-    }
-
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Header("Kulturadar", filter, filterOpen, loading, onRefresh, onFilterToggle, onFilter)
+        Header("Kulturadar", filter, loading, onRefresh, onFilterOpen, onFilter)
+        AnimatedVisibility(filterOpen) { DatingFilterPanel(filter, onFilter) }
 
         if (events.isEmpty() || index >= events.size) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Prošel jsi všechny akce 🎉", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(10.dp))
+                    Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(42.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Text("Prošel jsi všechny akce", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(12.dp))
                     OutlinedButton(onClick = { index = 0 }) { Text("Začít znovu") }
                 }
             }
@@ -319,58 +304,49 @@ private fun SwipeDiscoverScreen(
         }
 
         val event = events[index]
-        val reactAndNext: (Reaction) -> Unit = { reaction ->
-            onReaction(event.id, reaction)
+        val next: (Reaction) -> Unit = { reaction ->
+            onReact(event.id, reaction)
             dragX = 0f
             index++
         }
 
-        Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Card(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .graphicsLayer {
-                        translationX = dragX
-                        rotationZ = dragX / 40f
-                    }
+                modifier = Modifier.fillMaxWidth().weight(1f)
+                    .graphicsLayer { translationX = dragX; rotationZ = dragX / 45f }
                     .pointerInput(event.id) {
-                        detectDragGestures(
-                            onDragEnd = {
-                                when {
-                                    dragX > 120f -> reactAndNext(Reaction.LOVED)
-                                    dragX < -120f -> reactAndNext(Reaction.HATED)
-                                    else -> dragX = 0f
-                                }
+                        detectDragGestures(onDragEnd = {
+                            when {
+                                dragX > 120f -> next(Reaction.LOVED)
+                                dragX < -120f -> next(Reaction.HATED)
+                                else -> dragX = 0f
                             }
-                        ) { change, amount ->
-                            change.consume()
-                            dragX += amount.x
-                        }
+                        }) { change, amount -> change.consume(); dragX += amount.x }
                     }
                     .clickable { onOpen(event) },
-                shape = RoundedCornerShape(30.dp),
+                shape = RoundedCornerShape(32.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Box(Modifier.fillMaxSize()) {
                     EventVisual(event, Modifier.fillMaxSize())
-                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent, Color(0xE6020604)))))
-                    AssistChip(onClick = {}, label = { Text(event.type.title) }, modifier = Modifier.align(Alignment.TopStart).padding(16.dp))
-                    Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-                        Text(event.title, fontSize = 30.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Spacer(Modifier.height(6.dp))
-                        Text("${event.dateLabel} ${event.timeLabel} · ${event.city}", color = MaterialTheme.colorScheme.secondary, fontSize = 17.sp)
-                        Text(event.venue, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent, Color(0xF0050507)))))
+                    SuggestionTag(event.type.title, Modifier.align(Alignment.TopStart).padding(18.dp))
+                    Icon(Icons.Default.FavoriteBorder, null, modifier = Modifier.align(Alignment.TopEnd).padding(20.dp))
+                    Column(Modifier.align(Alignment.BottomStart).padding(22.dp)) {
+                        Text(event.title, fontSize = 31.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(8.dp))
+                        Text("${event.dateLabel} · ${event.timeLabel}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        Text("${event.city} · ${event.venue}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(4.dp))
                         Text(event.priceCzk?.let { if (it == 0) "Zdarma" else "od $it Kč" } ?: "Cena neuvedena", fontWeight = FontWeight.Bold)
                     }
                 }
             }
-
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
-                LargeActionButton(Icons.Default.Close, "Nechci", MaterialTheme.colorScheme.error) { reactAndNext(Reaction.HATED) }
+                ActionCircle(Icons.Default.Close, MaterialTheme.colorScheme.error) { next(Reaction.HATED) }
                 FilledTonalIconButton(onClick = { onOpen(event) }, modifier = Modifier.size(58.dp)) { Icon(Icons.Default.Info, "Detail") }
-                LargeActionButton(Icons.Default.Favorite, "Milované", MaterialTheme.colorScheme.primary) { reactAndNext(Reaction.LOVED) }
+                ActionCircle(Icons.Default.Favorite, MaterialTheme.colorScheme.primary) { next(Reaction.LOVED) }
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -378,105 +354,117 @@ private fun SwipeDiscoverScreen(
 }
 
 @Composable
-private fun LargeActionButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color, onClick: () -> Unit) {
-    FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(72.dp)) {
-        Icon(icon, label, tint = tint, modifier = Modifier.size(34.dp))
+private fun ActionCircle(icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, onClick: () -> Unit) {
+    FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(74.dp)) {
+        Icon(icon, null, tint = tint, modifier = Modifier.size(34.dp))
     }
 }
 
 @Composable
-private fun Header(
+private fun DatingFilterPanel(filter: EventFilter, onFilter: (EventFilter) -> Unit) {
+    var draft by remember(filter) { mutableStateOf(filter) }
+    val cities = listOf("Všechna města", "Ostrava", "Praha", "Brno", "Olomouc", "Opava", "Frýdek-Místek", "Plzeň")
+    val price = (draft.maxPrice ?: 3000).coerceIn(0, 5000)
+
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(30.dp),
+        tonalElevation = 4.dp
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Filtry", fontSize = 23.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+                TextButton(onClick = {
+                    draft = EventFilter(search = filter.search)
+                    onFilter(draft)
+                }) { Text("Vymazat vše") }
+            }
+
+            Text("Kategorie", fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(EventType.ALL, EventType.EVENT, EventType.THEATRE, EventType.CINEMA, EventType.CONCERT, EventType.EXHIBITION).forEach { type ->
+                    FilterChip(selected = draft.type == type, onClick = { draft = draft.copy(type = type) }, label = { Text(type.title) })
+                }
+            }
+
+            Text("Lokalita", fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                cities.forEach { city -> FilterChip(selected = draft.city == city, onClick = { draft = draft.copy(city = city) }, label = { Text(city) }) }
+            }
+
+            Text("Kdy", fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("Kdykoliv", "Dnes", "Zítra", "Tento týden").forEach { date ->
+                    FilterChip(selected = draft.date == date, onClick = { draft = draft.copy(date = date) }, label = { Text(date) })
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Maximální cena", fontWeight = FontWeight.Bold)
+                    Text(if (draft.maxPrice == null) "Bez omezení" else "do ${draft.maxPrice} Kč", color = MaterialTheme.colorScheme.primary)
+                }
+                Switch(checked = draft.freeOnly, onCheckedChange = { draft = draft.copy(freeOnly = it) })
+                Spacer(Modifier.width(8.dp))
+                Text("Zdarma")
+            }
+            Slider(
+                value = price.toFloat(),
+                onValueChange = { draft = draft.copy(maxPrice = it.toInt()) },
+                valueRange = 0f..5000f,
+                steps = 19
+            )
+
+            Button(onClick = { onFilter(draft) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text("Použít filtry")
+            }
+        }
+    }
+}
+
+@Composable
+private fun CardListScreen(
     title: String,
+    events: List<CulturalEvent>,
     filter: EventFilter,
     filterOpen: Boolean,
     loading: Boolean,
+    onFilterOpen: () -> Unit,
+    onFilter: (EventFilter) -> Unit,
+    onOpen: (CulturalEvent) -> Unit,
+    reactionFor: (String) -> Reaction,
+    onReact: (String, Reaction) -> Unit,
     onRefresh: () -> Unit,
-    onFilterToggle: () -> Unit,
-    onFilter: (EventFilter) -> Unit
+    modifier: Modifier = Modifier
 ) {
-    Row(Modifier.fillMaxWidth().padding(18.dp, 16.dp, 18.dp, 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 30.sp, fontWeight = FontWeight.Black)
-            Text("Celá ČR · akce · divadla · kina · koncerty", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, "Obnovit") }
-        FilledTonalIconButton(onClick = onFilterToggle) { Icon(Icons.Default.Tune, "Filtry") }
-    }
-    OutlinedTextField(
-        value = filter.search,
-        onValueChange = { onFilter(filter.copy(search = it)) },
-        singleLine = true,
-        leadingIcon = { Icon(Icons.Default.Search, null) },
-        placeholder = { Text("Hledat akci, místo, město…") },
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
-        shape = RoundedCornerShape(20.dp)
-    )
-    Spacer(Modifier.height(10.dp))
-    TypeRail(filter.type) { onFilter(filter.copy(type = it)) }
-    AnimatedVisibility(filterOpen) { FilterPanel(filter, onFilter) }
-    if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-}
-
-@Composable
-private fun TypeRail(selected: EventType, onSelect: (EventType) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(EventType.ALL, EventType.EVENT, EventType.THEATRE, EventType.CINEMA, EventType.CONCERT, EventType.EXHIBITION).forEach { t ->
-            FilterChip(selected = selected == t, onClick = { onSelect(t) }, label = { Text(t.title) })
-        }
-    }
-}
-
-@Composable
-private fun FilterPanel(filter: EventFilter, onFilter: (EventFilter) -> Unit) {
-    val cities = listOf("Všechna města", "Praha", "Brno", "Ostrava", "Plzeň", "Olomouc", "Liberec", "Hradec Králové", "Pardubice", "Zlín", "České Budějovice", "Opava", "Frýdek-Místek", "Karlovy Vary", "Jihlava", "Ústí nad Labem", "Tábor", "Mladá Boleslav")
-    Surface(Modifier.fillMaxWidth().padding(18.dp, 8.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .6f), shape = RoundedCornerShape(24.dp)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Filtry", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Text("Město · celá Česká republika")
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                cities.forEach { city -> FilterChip(selected = filter.city == city, onClick = { onFilter(filter.copy(city = city)) }, label = { Text(city) }) }
-            }
-            Text("Kdy")
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("Kdykoliv", "Dnes", "Zítra", "Tento týden").forEach { whenText ->
-                    FilterChip(selected = filter.date == whenText, onClick = { onFilter(filter.copy(date = whenText)) }, label = { Text(whenText) })
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(filter.freeOnly, { onFilter(filter.copy(freeOnly = it)) })
-                Spacer(Modifier.width(8.dp))
-                Text("Jen zdarma")
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Max. cena")
-                Spacer(Modifier.width(12.dp))
-                OutlinedTextField(
-                    value = filter.maxPrice?.toString().orEmpty(),
-                    onValueChange = { onFilter(filter.copy(maxPrice = it.toIntOrNull())) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    suffix = { Text("Kč") },
-                    modifier = Modifier.width(150.dp)
-                )
+    Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Header(title, filter, loading, onRefresh, onFilterOpen, onFilter)
+        AnimatedVisibility(filterOpen) { DatingFilterPanel(filter, onFilter) }
+        if (events.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Nic tu teď není. Zkus změnit filtry.") }
+        } else {
+            LazyColumn(contentPadding = PaddingValues(18.dp, 8.dp, 18.dp, 110.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                items(events, key = { it.id }) { event -> EventCard(event, reactionFor(event.id), onReact, onOpen) }
             }
         }
     }
 }
 
 @Composable
-private fun EventCard(event: CulturalEvent, reaction: Reaction, onReaction: (String, Reaction) -> Unit, onOpen: (CulturalEvent) -> Unit) {
+private fun EventCard(event: CulturalEvent, reaction: Reaction, onReact: (String, Reaction) -> Unit, onOpen: (CulturalEvent) -> Unit) {
     Card(
-        Modifier.fillMaxWidth().clickable { onOpen(event) },
-        shape = RoundedCornerShape(26.dp),
+        modifier = Modifier.fillMaxWidth().clickable { onOpen(event) },
+        shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Box(Modifier.fillMaxWidth().height(230.dp)) {
+        Box(Modifier.fillMaxWidth().height(260.dp)) {
             EventVisual(event, Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6020604)))))
-            AssistChip(onClick = {}, label = { Text(event.type.title) }, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
-            Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
-                Text(event.title, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("${event.dateLabel} ${event.timeLabel} · ${event.city}", color = MaterialTheme.colorScheme.secondary)
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xF0050507)))))
+            SuggestionTag(event.type.title, Modifier.align(Alignment.TopStart).padding(14.dp))
+            Column(Modifier.align(Alignment.BottomStart).padding(18.dp)) {
+                Text(event.title, fontSize = 25.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("${event.dateLabel} ${event.timeLabel} · ${event.city}", color = MaterialTheme.colorScheme.primary)
             }
         }
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -484,13 +472,20 @@ private fun EventCard(event: CulturalEvent, reaction: Reaction, onReaction: (Str
                 Text(event.venue, fontWeight = FontWeight.SemiBold)
                 Text(event.priceCzk?.let { if (it == 0) "Zdarma" else "od $it Kč" } ?: "Cena neuvedena", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            IconButton(onClick = { onReaction(event.id, if (reaction == Reaction.HATED) Reaction.NONE else Reaction.HATED) }) {
-                Icon(Icons.Default.ThumbDown, "Nenáviděné", tint = if (reaction == Reaction.HATED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+            IconButton(onClick = { onReact(event.id, if (reaction == Reaction.HATED) Reaction.NONE else Reaction.HATED) }) {
+                Icon(Icons.Default.ThumbDown, null, tint = if (reaction == Reaction.HATED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            FilledTonalIconButton(onClick = { onReaction(event.id, if (reaction == Reaction.LOVED) Reaction.NONE else Reaction.LOVED) }) {
-                Icon(Icons.Default.Favorite, "Milované", tint = if (reaction == Reaction.LOVED) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            FilledTonalIconButton(onClick = { onReact(event.id, if (reaction == Reaction.LOVED) Reaction.NONE else Reaction.LOVED) }) {
+                Icon(Icons.Default.Favorite, null, tint = if (reaction == Reaction.LOVED) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+    }
+}
+
+@Composable
+private fun SuggestionTag(text: String, modifier: Modifier = Modifier) {
+    Surface(modifier = modifier, color = Color(0xAA09080A), shape = RoundedCornerShape(14.dp), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
+        Text(text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp), fontWeight = FontWeight.Bold)
     }
 }
 
@@ -506,11 +501,8 @@ private fun EventVisual(event: CulturalEvent, modifier: Modifier = Modifier) {
             EventType.EXHIBITION -> "🖼️"
             else -> "🎪"
         }
-        Box(
-            modifier.background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary.copy(.5f), Color(0xFF0A2518), Color(0xFF020604)))),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(symbol, fontSize = 92.sp)
+        Box(modifier.background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary.copy(.45f), Color(0xFF18121A), Color(0xFF050506)))), contentAlignment = Alignment.Center) {
+            Text(symbol, fontSize = 88.sp)
         }
     }
 }
@@ -520,11 +512,11 @@ private fun EventDetail(event: CulturalEvent, reaction: Reaction, onBack: () -> 
     val context = LocalContext.current
     LazyColumn(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentPadding = PaddingValues(bottom = 120.dp)) {
         item {
-            Box(Modifier.fillMaxWidth().height(330.dp)) {
+            Box(Modifier.fillMaxWidth().height(360.dp)) {
                 EventVisual(event, Modifier.fillMaxSize())
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xFF020604)))))
-                IconButton(onClick = onBack, modifier = Modifier.padding(12.dp).align(Alignment.TopStart)) { Icon(Icons.Default.ArrowBack, "Zpět") }
-                Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xFF050506)))))
+                FilledTonalIconButton(onClick = onBack, modifier = Modifier.padding(16.dp).align(Alignment.TopStart)) { Icon(Icons.Default.ArrowBack, "Zpět") }
+                Column(Modifier.align(Alignment.BottomStart).padding(22.dp)) {
                     Text(event.type.title.uppercase(), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                     Text(event.title, fontSize = 34.sp, fontWeight = FontWeight.Black)
                 }
@@ -536,19 +528,19 @@ private fun EventDetail(event: CulturalEvent, reaction: Reaction, onBack: () -> 
                 InfoRow(Icons.Default.LocationOn, "${event.venue}, ${event.city}")
                 InfoRow(Icons.Default.Payments, event.priceCzk?.let { if (it == 0) "Zdarma" else "od $it Kč" } ?: "Cena neuvedena")
                 HorizontalDivider()
-                Text("O akci", fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                Text(event.description, lineHeight = 23.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("O akci", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(event.description, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 23.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(onClick = { onReact(if (reaction == Reaction.HATED) Reaction.NONE else Reaction.HATED) }, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.ThumbDown, null); Spacer(Modifier.width(8.dp)); Text("Nenáviděné")
+                        Icon(Icons.Default.ThumbDown, null); Spacer(Modifier.width(8.dp)); Text("Nechci")
                     }
                     Button(onClick = { onReact(if (reaction == Reaction.LOVED) Reaction.NONE else Reaction.LOVED) }, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.Favorite, null); Spacer(Modifier.width(8.dp)); Text("Milované")
+                        Icon(Icons.Default.Favorite, null); Spacer(Modifier.width(8.dp)); Text("Miluji")
                     }
                 }
                 event.ticketUrl?.let { url ->
                     Button(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Vstupenky / detail pořadatele"); Spacer(Modifier.width(8.dp)); Icon(Icons.Default.OpenInNew, null)
+                        Text("Vstupenky / detail"); Spacer(Modifier.width(8.dp)); Icon(Icons.Default.OpenInNew, null)
                     }
                 }
                 Text("Zdroj: ${event.source}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -575,33 +567,67 @@ private fun SettingsScreen(
     onSave: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    LazyColumn(modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(bottom = 110.dp)) {
-        item { Text("Nastavení", fontSize = 30.sp, fontWeight = FontWeight.Black) }
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("settings", 0) }
+    var selectedAccent by remember { mutableStateOf(prefs.getString("accent_theme", "wine") ?: "wine") }
+
+    LazyColumn(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(top = 18.dp, bottom = 120.dp)) {
         item {
-            Text("Způsob objevování", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilterChip(selected = viewMode == ViewMode.CARDS, onClick = { onModeChange(ViewMode.CARDS) }, label = { Text("Přehled karet") }, leadingIcon = { Icon(Icons.Default.ViewAgenda, null) })
-                FilterChip(selected = viewMode == ViewMode.SWIPE, onClick = { onModeChange(ViewMode.SWIPE) }, label = { Text("Swipe") }, leadingIcon = { Icon(Icons.Default.Swipe, null) })
+            Text("Nastavení", fontSize = 32.sp, fontWeight = FontWeight.Black)
+            Text("Udělej si Kulturadar po svém", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        item {
+            SettingsCard {
+                Text("Vzhled a barvy", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    accents.forEach { accent ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Box(
+                                Modifier.size(48.dp).clip(CircleShape).background(accent.color)
+                                    .then(if (selectedAccent == accent.id) Modifier.border(3.dp, Color.White, CircleShape) else Modifier)
+                                    .clickable {
+                                        selectedAccent = accent.id
+                                        prefs.edit().putString("accent_theme", accent.id).apply()
+                                        (context as? Activity)?.recreate()
+                                    }
+                            )
+                            Spacer(Modifier.height(5.dp))
+                            Text(accent.label, fontSize = 11.sp)
+                        }
+                    }
+                }
             }
         }
-        item { HorizontalDivider() }
         item {
-            Text("Živá data", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text("Ticketmaster je volitelný zdroj pro obecné akce po celé České republice. Bez klíče běží aplikace na rozšířených ukázkových datech z celé ČR.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        item {
-            OutlinedTextField(value = apiKey, onValueChange = onKeyChange, label = { Text("Ticketmaster API key") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        }
-        item {
-            Button(onClick = onSave, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Sync, null); Spacer(Modifier.width(8.dp)); Text("Uložit a načíst živá data")
+            SettingsCard {
+                Text("Způsob objevování", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FilterChip(selected = viewMode == ViewMode.CARDS, onClick = { onModeChange(ViewMode.CARDS) }, label = { Text("Přehled") }, leadingIcon = { Icon(Icons.Default.ViewAgenda, null) })
+                    FilterChip(selected = viewMode == ViewMode.SWIPE, onClick = { onModeChange(ViewMode.SWIPE) }, label = { Text("Swipe") }, leadingIcon = { Icon(Icons.Default.Swipe, null) })
+                }
             }
         }
-        item { HorizontalDivider() }
         item {
-            Text("Kulturadar 1.2", fontWeight = FontWeight.Bold)
-            Text("Oba režimy používají stejné Milované/Nenáviděné, filtry a doporučení. Systémové gesto Zpět funguje v detailech, kartách i swipe režimu.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SettingsCard {
+                Text("Živá data", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("Volitelný Ticketmaster API klíč pro načítání akcí.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(value = apiKey, onValueChange = onKeyChange, label = { Text("Ticketmaster API key") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+                Button(onClick = onSave, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Sync, null); Spacer(Modifier.width(8.dp)); Text("Uložit a načíst")
+                }
+            }
         }
+        item { Text("Kulturadar 1.5 · nový vzhled", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+}
+
+@Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(26.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), content = content)
     }
 }
