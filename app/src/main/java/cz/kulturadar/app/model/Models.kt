@@ -19,7 +19,13 @@ data class CulturalEvent(
     val imageUrl: String? = null,
     val description: String,
     val ticketUrl: String? = null,
-    val source: String = "Demo"
+    val source: String = "Ticketmaster",
+    val genre: String? = null,
+    val status: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val imageIsFallback: Boolean = false,
+    val imageAttribution: String? = null
 )
 
 data class EventFilter(
@@ -28,5 +34,7 @@ data class EventFilter(
     val date: String = "Kdykoliv",
     val freeOnly: Boolean = false,
     val maxPrice: Int? = null,
-    val search: String = ""
+    val search: String = "",
+    val onlyWithRealImage: Boolean = false,
+    val hideDisliked: Boolean = true
 )
