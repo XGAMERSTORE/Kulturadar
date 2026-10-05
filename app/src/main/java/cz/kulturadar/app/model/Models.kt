@@ -13,7 +13,9 @@ data class CulturalEvent(
     val type: EventType,
     val city: String,
     val venue: String,
+    /** ISO yyyy-MM-dd whenever the source provides a real date. */
     val dateLabel: String,
+    /** Local HH:mm whenever the source provides a real time. */
     val timeLabel: String,
     val priceCzk: Int?,
     val imageUrl: String? = null,
@@ -25,7 +27,14 @@ data class CulturalEvent(
     val latitude: Double? = null,
     val longitude: Double? = null,
     val imageIsFallback: Boolean = false,
-    val imageAttribution: String? = null
+    val imageAttribution: String? = null,
+    val address: String? = null,
+    val postalCode: String? = null,
+    val priceMaxCzk: Int? = null,
+    val currency: String? = null,
+    val salesStart: String? = null,
+    val salesEnd: String? = null,
+    val timezone: String? = null
 )
 
 data class EventFilter(
@@ -36,5 +45,7 @@ data class EventFilter(
     val maxPrice: Int? = null,
     val search: String = "",
     val onlyWithRealImage: Boolean = false,
-    val hideDisliked: Boolean = true
+    val hideDisliked: Boolean = true,
+    val hideUnavailable: Boolean = true,
+    val genre: String? = null
 )
