@@ -14,14 +14,45 @@ data class EventLoadResult(
 )
 
 class EventRepository {
-    fun demoEvents(): List<CulturalEvent> = emptyList()
+    private val goOut = GoOutRepository()
+
+    /**
+     * Real cached bootstrap cards from the previous Kulturadar approach.
+     * They are only used if all live public sources fail, so a fresh install is not an empty shell.
+     */
+    fun demoEvents(): List<CulturalEvent> = bootstrapEvents()
+
+    fun loadAllSources(apiKey: String, city: String?, keyword: String?): EventLoadResult {
+        val goOutResult = goOut.load(city, keyword)
+        val ticketResult = if (apiKey.isNotBlank()) loadTicketmaster(apiKey, city, keyword) else EventLoadResult(emptyList())
+
+        val merged = (goOutResult.events + ticketResult.events)
+            .distinctBy { canonicalKey(it) }
+            .sortedBy { it.dateLabel + it.timeLabel }
+
+        if (merged.isNotEmpty()) return EventLoadResult(merged)
+
+        val fallback = bootstrapEvents()
+            .filter { city.isNullOrBlank() || city == "Všechna města" || it.city.equals(city, true) }
+            .filter { keyword.isNullOrBlank() || listOf(it.title, it.subtitle, it.venue, it.city).any { v -> v.contains(keyword, true) } }
+
+        return EventLoadResult(
+            fallback,
+            when {
+                fallback.isNotEmpty() -> "Živý zdroj teď neodpověděl. Zobrazuji poslední ověřený GoOut výběr, dokud se data neobnoví."
+                goOutResult.error != null -> goOutResult.error
+                ticketResult.error != null -> ticketResult.error
+                else -> "Pro tento výběr nejsou dostupné žádné akce."
+            }
+        )
+    }
 
     /** Compatibility wrapper for older UI code. */
     fun ticketmaster(apiKey: String, city: String?, keyword: String?): List<CulturalEvent> =
         loadTicketmaster(apiKey, city, keyword).events
 
     fun loadTicketmaster(apiKey: String, city: String?, keyword: String?): EventLoadResult {
-        if (apiKey.isBlank()) return EventLoadResult(emptyList(), "Chybí Ticketmaster API klíč.")
+        if (apiKey.isBlank()) return EventLoadResult(emptyList())
 
         val params = mutableListOf(
             "apikey=${enc(apiKey.trim())}",
@@ -40,24 +71,27 @@ class EventRepository {
             readTimeout = 12000
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "Kulturadar/1.7 Android")
+            setRequestProperty("User-Agent", "Kulturadar/1.8 Android")
         }
 
         return try {
             val code = conn.responseCode
-            if (code == 401 || code == 403) return EventLoadResult(emptyList(), "Ticketmaster API klíč není platný nebo nemá přístup.")
-            if (code == 429) return EventLoadResult(emptyList(), "Ticketmaster právě omezuje počet dotazů. Zkus to za chvíli znovu.")
+            if (code == 401 || code == 403) return EventLoadResult(emptyList(), "Ticketmaster API klíč není platný.")
+            if (code == 429) return EventLoadResult(emptyList(), "Ticketmaster právě omezuje počet dotazů.")
             if (code !in 200..299) return EventLoadResult(emptyList(), "Ticketmaster vrátil chybu $code.")
 
             val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
             val arr = root.optJSONObject("_embedded")?.optJSONArray("events")
-                ?: return EventLoadResult(emptyList(), "Pro tento výběr nejsou dostupné žádné akce.")
+                ?: return EventLoadResult(emptyList())
 
             val parsed = buildList {
                 for (i in 0 until arr.length()) {
                     val e = arr.optJSONObject(i) ?: continue
                     val dates = e.optJSONObject("dates")
                     val start = dates?.optJSONObject("start")
+                    val date = start?.optString("localDate").orEmpty()
+                    if (date.isBlank()) continue
+
                     val status = dates?.optJSONObject("status")?.optString("code").orEmpty().ifBlank { null }
                     val venue = e.optJSONObject("_embedded")?.optJSONArray("venues")?.optJSONObject(0)
                     val location = venue?.optJSONObject("location")
@@ -74,18 +108,13 @@ class EventRepository {
                     val title = e.optString("name").trim()
                     if (title.isBlank()) continue
 
-                    val address = venue?.optJSONObject("address")?.optString("line1")?.trim()?.takeIf(String::isNotBlank)
-                    val cityName = venue?.optJSONObject("city")?.optString("name").orEmpty().ifBlank { "Česko" }
-                    val date = start?.optString("localDate").orEmpty()
-                    if (date.isBlank()) continue
-
                     add(
                         CulturalEvent(
-                            id = e.optString("id", "tm-$i"),
+                            id = "tm-${e.optString("id", i.toString())}",
                             title = title,
                             subtitle = listOfNotNull(genre, subGenre).distinct().joinToString(" · ").ifBlank { segment.ifBlank { "Akce" } },
                             type = mapType(segment, genre, subGenre),
-                            city = cityName,
+                            city = venue?.optJSONObject("city")?.optString("name").orEmpty().ifBlank { "Česko" },
                             venue = venue?.optString("name").orEmpty().ifBlank { "Místo neuvedeno" },
                             dateLabel = date,
                             timeLabel = start?.optString("localTime").orEmpty().take(5),
@@ -94,7 +123,7 @@ class EventRepository {
                             description = e.optString("info")
                                 .ifBlank { e.optString("pleaseNote") }
                                 .ifBlank { e.optString("description") }
-                                .ifBlank { "Pořadatel neposkytl delší popis. Otevři oficiální detail pro aktuální informace." },
+                                .ifBlank { "Podrobnosti jsou dostupné u pořadatele." },
                             ticketUrl = e.optString("url").takeIf(String::isNotBlank),
                             source = "Ticketmaster",
                             genre = genre ?: subGenre,
@@ -103,7 +132,7 @@ class EventRepository {
                             longitude = location?.optString("longitude")?.toDoubleOrNull(),
                             imageIsFallback = image?.fallback ?: false,
                             imageAttribution = image?.attribution,
-                            address = address,
+                            address = venue?.optJSONObject("address")?.optString("line1")?.takeIf(String::isNotBlank),
                             postalCode = venue?.optString("postalCode")?.takeIf(String::isNotBlank),
                             priceMaxCzk = priceMax,
                             currency = currency,
@@ -115,17 +144,57 @@ class EventRepository {
                 }
             }.distinctBy { it.id }
 
-            EventLoadResult(parsed, if (parsed.isEmpty()) "Pro tento výběr nejsou dostupné žádné akce." else null)
+            EventLoadResult(parsed)
         } catch (_: java.net.SocketTimeoutException) {
-            EventLoadResult(emptyList(), "Načítání trvalo příliš dlouho. Zkontroluj připojení a zkus to znovu.")
+            EventLoadResult(emptyList(), "Ticketmaster neodpověděl včas.")
         } catch (_: java.net.UnknownHostException) {
             EventLoadResult(emptyList(), "Internet není dostupný.")
         } catch (_: Exception) {
-            EventLoadResult(emptyList(), "Akce se nepodařilo načíst. Zkus to znovu.")
+            EventLoadResult(emptyList(), "Ticketmaster se nepodařilo načíst.")
         } finally {
             conn.disconnect()
         }
     }
+
+    private fun bootstrapEvents(): List<CulturalEvent> = listOf(
+        goOutSnapshot("katarzia-robin", "Katarzia & Robin Duo", "Koncert", EventType.CONCERT, "Ostrava", "Barrák", "2026-10-07", "20:00", null, "https://goout.net/cs/katarzia-and-robin-duo/szrably/"),
+        goOutSnapshot("dub-pistols", "Dub Pistols", "Elektronika · big beat", EventType.CONCERT, "Ostrava", "Barrák", "2026-10-11", "20:00", 490, "https://goout.net/cs/dub-pistols/szdhosx/"),
+        goOutSnapshot("maly-princ", "Malý princ, Recitál", "Divadlo · hudba · slovo", EventType.THEATRE, "Ostrava", "Multifunkční aula Gong", "2026-10-19", "19:00", 890, "https://goout.net/cs/maly-princ-recital/szowkgy/"),
+        goOutSnapshot("pro-pain", "Pro-Pain + Sloth + Madrain", "Metal · rock", EventType.CONCERT, "Ostrava", "Barrák", "2026-11-08", "18:30", 590, "https://goout.net/en/pro-pain%2Bsloth%2Bmadrain/szhrjky/"),
+        goOutSnapshot("sps-fialky", "SPS + The Fialky – God Save the Punk II. 2026", "Punk · rock", EventType.CONCERT, "Ostrava", "Barrák", "2026-11-13", "20:00", 390, "https://goout.net/cs/sps%2Bthe-fialky-god-save-the-punk-ii-2026/szkmtky/"),
+        goOutSnapshot("strihavka", "Kamil Střihavka: 40 let na scéně", "Rock · pop", EventType.CONCERT, "Ostrava", "Barrák", "2026-11-26", "19:30", 790, "https://goout.net/en/kamil-strihavka-40-let-na-scene/szcaqiy/")
+    )
+
+    private fun goOutSnapshot(
+        id: String,
+        title: String,
+        subtitle: String,
+        type: EventType,
+        city: String,
+        venue: String,
+        date: String,
+        time: String,
+        price: Int?,
+        url: String
+    ) = CulturalEvent(
+        id = "snapshot-$id",
+        title = title,
+        subtitle = subtitle,
+        type = type,
+        city = city,
+        venue = venue,
+        dateLabel = date,
+        timeLabel = time,
+        priceCzk = price,
+        imageUrl = "https://api.microlink.io/?url=${enc(url)}&embed=image.url",
+        description = "Ověřená akce z GoOut. Při připojení Kulturadar načte živou verzi a aktuální detaily.",
+        ticketUrl = url,
+        source = "GoOut · offline výběr",
+        genre = subtitle
+    )
+
+    private fun canonicalKey(event: CulturalEvent): String =
+        "${event.title.lowercase().replace(Regex("\\s+"), " ").trim()}|${event.dateLabel}|${event.city.lowercase()}"
 
     private data class ImagePick(val url: String, val fallback: Boolean, val attribution: String?)
 
