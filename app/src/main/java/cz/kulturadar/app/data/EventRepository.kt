@@ -8,21 +8,29 @@ import java.net.URLEncoder
 import java.net.URL
 import java.nio.charset.StandardCharsets
 
+data class EventLoadResult(
+    val events: List<CulturalEvent>,
+    val error: String? = null
+)
+
 class EventRepository {
-    /**
-     * No fake catalogue in production. If live data are unavailable, UI shows a clear empty/error state.
-     */
     fun demoEvents(): List<CulturalEvent> = emptyList()
 
-    fun ticketmaster(apiKey: String, city: String?, keyword: String?): List<CulturalEvent> {
-        if (apiKey.isBlank()) return emptyList()
+    /** Compatibility wrapper for older UI code. */
+    fun ticketmaster(apiKey: String, city: String?, keyword: String?): List<CulturalEvent> =
+        loadTicketmaster(apiKey, city, keyword).events
+
+    fun loadTicketmaster(apiKey: String, city: String?, keyword: String?): EventLoadResult {
+        if (apiKey.isBlank()) return EventLoadResult(emptyList(), "Chybí Ticketmaster API klíč.")
 
         val params = mutableListOf(
-            "apikey=${enc(apiKey)}",
+            "apikey=${enc(apiKey.trim())}",
             "countryCode=CZ",
             "size=200",
             "sort=date,asc",
-            "locale=cs,*"
+            "locale=cs,*",
+            "includeTBA=no",
+            "includeTBD=no"
         )
         city?.takeIf { it.isNotBlank() && it != "Všechna města" }?.let { params += "city=${enc(it)}" }
         keyword?.takeIf { it.isNotBlank() }?.let { params += "keyword=${enc(it)}" }
@@ -32,29 +40,44 @@ class EventRepository {
             readTimeout = 12000
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "Kulturadar/1.6 Android")
+            setRequestProperty("User-Agent", "Kulturadar/1.7 Android")
         }
 
         return try {
-            if (conn.responseCode !in 200..299) return emptyList()
-            val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-            val arr = root.optJSONObject("_embedded")?.optJSONArray("events") ?: return emptyList()
+            val code = conn.responseCode
+            if (code == 401 || code == 403) return EventLoadResult(emptyList(), "Ticketmaster API klíč není platný nebo nemá přístup.")
+            if (code == 429) return EventLoadResult(emptyList(), "Ticketmaster právě omezuje počet dotazů. Zkus to za chvíli znovu.")
+            if (code !in 200..299) return EventLoadResult(emptyList(), "Ticketmaster vrátil chybu $code.")
 
-            buildList {
+            val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            val arr = root.optJSONObject("_embedded")?.optJSONArray("events")
+                ?: return EventLoadResult(emptyList(), "Pro tento výběr nejsou dostupné žádné akce.")
+
+            val parsed = buildList {
                 for (i in 0 until arr.length()) {
                     val e = arr.optJSONObject(i) ?: continue
-                    val dates = e.optJSONObject("dates")?.optJSONObject("start")
-                    val status = e.optJSONObject("dates")?.optJSONObject("status")?.optString("code").orEmpty().ifBlank { null }
+                    val dates = e.optJSONObject("dates")
+                    val start = dates?.optJSONObject("start")
+                    val status = dates?.optJSONObject("status")?.optString("code").orEmpty().ifBlank { null }
                     val venue = e.optJSONObject("_embedded")?.optJSONArray("venues")?.optJSONObject(0)
                     val location = venue?.optJSONObject("location")
                     val classifications = e.optJSONArray("classifications")?.optJSONObject(0)
                     val segment = classifications?.optJSONObject("segment")?.optString("name").orEmpty()
-                    val genre = classifications?.optJSONObject("genre")?.optString("name").orEmpty().takeIf { it.isNotBlank() && !it.equals("Undefined", true) }
-                    val subGenre = classifications?.optJSONObject("subGenre")?.optString("name").orEmpty().takeIf { it.isNotBlank() && !it.equals("Undefined", true) }
+                    val genre = classifications?.optJSONObject("genre")?.optString("name").cleanClassification()
+                    val subGenre = classifications?.optJSONObject("subGenre")?.optString("name").cleanClassification()
                     val image = bestImage(e)
-                    val price = e.optJSONArray("priceRanges")?.optJSONObject(0)?.optDouble("min")?.takeIf { !it.isNaN() }?.toInt()
-                    val title = e.optString("name", "Událost").trim()
+                    val prices = e.optJSONArray("priceRanges")?.optJSONObject(0)
+                    val priceMin = prices?.optDouble("min")?.takeIf { !it.isNaN() }?.toInt()
+                    val priceMax = prices?.optDouble("max")?.takeIf { !it.isNaN() }?.toInt()
+                    val currency = prices?.optString("currency")?.takeIf(String::isNotBlank)
+                    val sales = e.optJSONObject("sales")?.optJSONObject("public")
+                    val title = e.optString("name").trim()
                     if (title.isBlank()) continue
+
+                    val address = venue?.optJSONObject("address")?.optString("line1")?.trim()?.takeIf(String::isNotBlank)
+                    val cityName = venue?.optJSONObject("city")?.optString("name").orEmpty().ifBlank { "Česko" }
+                    val date = start?.optString("localDate").orEmpty()
+                    if (date.isBlank()) continue
 
                     add(
                         CulturalEvent(
@@ -62,13 +85,16 @@ class EventRepository {
                             title = title,
                             subtitle = listOfNotNull(genre, subGenre).distinct().joinToString(" · ").ifBlank { segment.ifBlank { "Akce" } },
                             type = mapType(segment, genre, subGenre),
-                            city = venue?.optJSONObject("city")?.optString("name").orEmpty().ifBlank { "Česko" },
+                            city = cityName,
                             venue = venue?.optString("name").orEmpty().ifBlank { "Místo neuvedeno" },
-                            dateLabel = dates?.optString("localDate").orEmpty().ifBlank { "Datum neuvedeno" },
-                            timeLabel = dates?.optString("localTime").orEmpty().take(5),
-                            priceCzk = price,
+                            dateLabel = date,
+                            timeLabel = start?.optString("localTime").orEmpty().take(5),
+                            priceCzk = priceMin,
                             imageUrl = image?.url,
-                            description = e.optString("info").ifBlank { e.optString("pleaseNote") }.ifBlank { e.optString("description") }.ifBlank { "Podrobnosti jsou dostupné u pořadatele." },
+                            description = e.optString("info")
+                                .ifBlank { e.optString("pleaseNote") }
+                                .ifBlank { e.optString("description") }
+                                .ifBlank { "Pořadatel neposkytl delší popis. Otevři oficiální detail pro aktuální informace." },
                             ticketUrl = e.optString("url").takeIf(String::isNotBlank),
                             source = "Ticketmaster",
                             genre = genre ?: subGenre,
@@ -76,13 +102,26 @@ class EventRepository {
                             latitude = location?.optString("latitude")?.toDoubleOrNull(),
                             longitude = location?.optString("longitude")?.toDoubleOrNull(),
                             imageIsFallback = image?.fallback ?: false,
-                            imageAttribution = image?.attribution
+                            imageAttribution = image?.attribution,
+                            address = address,
+                            postalCode = venue?.optString("postalCode")?.takeIf(String::isNotBlank),
+                            priceMaxCzk = priceMax,
+                            currency = currency,
+                            salesStart = sales?.optString("startDateTime")?.takeIf(String::isNotBlank),
+                            salesEnd = sales?.optString("endDateTime")?.takeIf(String::isNotBlank),
+                            timezone = venue?.optString("timezone")?.takeIf(String::isNotBlank)
                         )
                     )
                 }
             }.distinctBy { it.id }
+
+            EventLoadResult(parsed, if (parsed.isEmpty()) "Pro tento výběr nejsou dostupné žádné akce." else null)
+        } catch (_: java.net.SocketTimeoutException) {
+            EventLoadResult(emptyList(), "Načítání trvalo příliš dlouho. Zkontroluj připojení a zkus to znovu.")
+        } catch (_: java.net.UnknownHostException) {
+            EventLoadResult(emptyList(), "Internet není dostupný.")
         } catch (_: Exception) {
-            emptyList()
+            EventLoadResult(emptyList(), "Akce se nepodařilo načíst. Zkus to znovu.")
         } finally {
             conn.disconnect()
         }
@@ -101,11 +140,11 @@ class EventRepository {
             val height = image.optInt("height", 0)
             val ratio = image.optString("ratio")
             val fallback = image.optBoolean("fallback", false)
-            var score = width.coerceAtMost(5000)
-            if (ratio == "16_9") score += 2500
-            if (!fallback) score += 5000
-            if (width >= 1024) score += 1200
-            if (height >= 576) score += 500
+            var score = width.coerceAtMost(6000)
+            if (ratio == "16_9") score += 3000
+            if (!fallback) score += 8000
+            if (width >= 1024) score += 1500
+            if (height >= 576) score += 600
             if (score > bestScore) {
                 bestScore = score
                 best = ImagePick(url, fallback, image.optString("attribution").takeIf(String::isNotBlank))
@@ -114,13 +153,17 @@ class EventRepository {
         return best
     }
 
+    private fun String?.cleanClassification(): String? = this
+        ?.trim()
+        ?.takeIf { it.isNotBlank() && !it.equals("Undefined", true) && !it.equals("Miscellaneous", true) }
+
     private fun mapType(segment: String, genre: String?, subGenre: String?): EventType {
         val text = listOf(segment, genre, subGenre).joinToString(" ")
         return when {
             text.contains("Music", true) || text.contains("Hudba", true) -> EventType.CONCERT
             text.contains("Film", true) || text.contains("Cinema", true) -> EventType.CINEMA
             text.contains("Theatre", true) || text.contains("Theater", true) || text.contains("Arts", true) -> EventType.THEATRE
-            text.contains("Exhibit", true) || text.contains("Museum", true) -> EventType.EXHIBITION
+            text.contains("Exhibit", true) || text.contains("Museum", true) || text.contains("Gallery", true) -> EventType.EXHIBITION
             else -> EventType.EVENT
         }
     }
