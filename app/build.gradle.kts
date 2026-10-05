@@ -12,8 +12,8 @@ android {
         applicationId = "cz.kulturadar.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.7.0"
+        versionCode = 7
+        versionName = "1.8.0"
         buildConfigField("boolean", "INTERNAL_PREMIUM", "true")
     }
 
@@ -45,5 +45,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("org.jsoup:jsoup:1.18.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
