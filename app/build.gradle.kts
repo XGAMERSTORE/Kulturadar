@@ -12,8 +12,9 @@ android {
         applicationId = "cz.kulturadar.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.5.0"
+        versionCode = 5
+        versionName = "1.6.0"
+        buildConfigField("boolean", "INTERNAL_PREMIUM", "true")
     }
 
     buildTypes {
@@ -22,7 +23,10 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
