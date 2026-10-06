@@ -18,24 +18,37 @@ import java.util.concurrent.TimeUnit
 class SmsTicketRepository {
     fun load(city: String?): EventLoadResult {
         val requested = city?.trim()?.takeIf { it.isNotBlank() && it != "Všechna města" }
+        val broadCities = listOf(
+            "Praha", "Brno", "Ostrava", "Plzeň", "Olomouc", "Liberec", "Hradec Králové", "Pardubice", "Zlín",
+            "České Budějovice", "Ústí nad Labem", "Jihlava", "Karlovy Vary", "Opava", "Frýdek-Místek", "Teplice",
+            "Děčín", "Most", "Chomutov", "Mladá Boleslav", "Kladno", "Tábor", "Znojmo", "Přerov", "Prostějov",
+            "Třinec", "Karviná", "Havířov", "Šumperk", "Vsetín", "Uherské Hradiště", "Jablonec nad Nisou"
+        )
         val urls = buildList {
-            if (requested != null) add("https://www.smsticket.cz/akce/${slug(requested)}")
+            if (requested != null) {
+                add("https://www.smsticket.cz/akce/${slug(requested)}")
+            } else {
+                broadCities.forEach { add("https://www.smsticket.cz/akce/${slug(it)}") }
+            }
             add("https://www.smsticket.cz/vstupenky")
         }.distinct()
 
-        val links = linkedSetOf<String>()
-        urls.forEach { listingUrl ->
-            val doc = runCatching { connect(listingUrl) }.getOrNull() ?: return@forEach
-            doc.select("a[href*=/vstupenky/]").forEach { a ->
-                val u = a.absUrl("href").ifBlank { runCatching { URL(URL(listingUrl), a.attr("href")).toString() }.getOrNull().orEmpty() }
-                if (u.startsWith("https://www.smsticket.cz/vstupenky/")) links += u.substringBefore('?').substringBefore('#')
-            }
-        }
+        val links = java.util.Collections.synchronizedSet(linkedSetOf<String>())
+        val listingPool = Executors.newFixedThreadPool(8)
+        try {
+            urls.map { listingUrl -> Callable {
+                val doc = runCatching { connect(listingUrl) }.getOrNull() ?: return@Callable
+                doc.select("a[href*=/vstupenky/]").forEach { a ->
+                    val u = a.absUrl("href").ifBlank { runCatching { URL(URL(listingUrl), a.attr("href")).toString() }.getOrNull().orEmpty() }
+                    if (u.startsWith("https://www.smsticket.cz/vstupenky/")) links += u.substringBefore('?').substringBefore('#')
+                }
+            } }.map(listingPool::submit).forEach { runCatching { it.get(8, TimeUnit.SECONDS) } }
+        } finally { listingPool.shutdownNow() }
         if (links.isEmpty()) return EventLoadResult(emptyList())
 
-        val pool = Executors.newFixedThreadPool(6)
+        val pool = Executors.newFixedThreadPool(8)
         val parsed = try {
-            links.take(if (requested != null) 100 else 70)
+            links.take(if (requested != null) 120 else 260)
                 .map { url -> Callable { parseDetail(url) } }
                 .map(pool::submit)
                 .mapNotNull { f -> runCatching { f.get(8, TimeUnit.SECONDS) }.getOrNull() }
