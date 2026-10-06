@@ -49,13 +49,16 @@ class PublicEventSourcesRepository {
     )
 
     fun load(city: String?, keyword: String?): EventLoadResult {
-        val pool = Executors.newFixedThreadPool(7)
+        val requestedCity = city?.takeIf { it.isNotBlank() && it != "Všechna města" }
+        val activeSources = if (requestedCity == null) sources else sources.filter { source ->
+            source.fallbackCity == null || source.fallbackCity.equals(requestedCity, true)
+        }
+        val pool = Executors.newFixedThreadPool(8)
         return try {
-            val futures = sources.map { source -> Callable { loadSource(source) } }.map(pool::submit)
+            val futures = activeSources.map { source -> Callable { loadSource(source) } }.map(pool::submit)
             val all = futures.flatMap { future ->
-                runCatching { future.get(15, TimeUnit.SECONDS) }.getOrElse { emptyList() }
+                runCatching { future.get(6, TimeUnit.SECONDS) }.getOrElse { emptyList() }
             }
-            val requestedCity = city?.takeIf { it.isNotBlank() && it != "Všechna města" }
             val q = keyword.orEmpty().trim()
             val filtered = all.asSequence()
                 .filter { e -> requestedCity == null || cityMatches(e, requestedCity) }
@@ -92,7 +95,7 @@ class PublicEventSourcesRepository {
                 }
             }
             .distinct()
-            .take(30)
+            .take(14)
             .toList()
 
         val detailPool = Executors.newFixedThreadPool(5)
@@ -100,7 +103,7 @@ class PublicEventSourcesRepository {
             links.map { url -> Callable {
                 val doc = runCatching { connect(url) }.getOrNull() ?: return@Callable emptyList<CulturalEvent>()
                 parseEvents(doc, source, url)
-            } }.map(detailPool::submit).flatMap { f -> runCatching { f.get(8, TimeUnit.SECONDS) }.getOrElse { emptyList() } }
+            } }.map(detailPool::submit).flatMap { f -> runCatching { f.get(4, TimeUnit.SECONDS) }.getOrElse { emptyList() } }
         } finally { detailPool.shutdownNow() }
 
         return (direct + details).distinctBy(::canonicalKey).take(90)
@@ -154,8 +157,13 @@ class PublicEventSourcesRepository {
         val price = numberInt(offer, "lowPrice") ?: numberInt(offer, "price")
         val maxPrice = numberInt(offer, "highPrice")
         val url = json.optString("url").takeIf { it.startsWith("http") } ?: pageUrl
-        val image = imageUrl(json.opt("image"))
-            ?: doc.selectFirst("meta[property=og:image]")?.attr("content")?.takeIf(String::isNotBlank)
+        val image = resolveImage(pageUrl, imageUrl(json.opt("image")))
+            ?: resolveImage(pageUrl, doc.selectFirst("meta[property=og:image]")?.attr("content"))
+            ?: resolveImage(pageUrl, doc.selectFirst("meta[name=twitter:image]")?.attr("content"))
+            ?: resolveImage(pageUrl, doc.selectFirst("link[rel=image_src]")?.attr("href"))
+            ?: resolveImage(pageUrl, doc.selectFirst("img[data-src], img[data-lazy-src], img[src]")?.let { img ->
+                img.attr("data-src").ifBlank { img.attr("data-lazy-src") }.ifBlank { img.attr("src") }
+            })
         val description = Jsoup.parse(json.optString("description")).text().ifBlank {
             doc.selectFirst("meta[name=description]")?.attr("content")?.trim().orEmpty()
         }.ifBlank { "Podrobnosti jsou dostupné u pořadatele." }
@@ -209,6 +217,12 @@ class PublicEventSourcesRepository {
         is JSONArray -> value.optString(0).takeIf(String::isNotBlank)
         is JSONObject -> value.optString("url").takeIf(String::isNotBlank)
         else -> null
+    }
+
+    private fun resolveImage(baseUrl: String, raw: String?): String? {
+        val value = raw?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val absolute = runCatching { URL(URL(baseUrl), value).toString() }.getOrNull() ?: value
+        return absolute.replaceFirst("http://", "https://").takeIf { it.startsWith("https://") }
     }
 
     private fun numberInt(obj: JSONObject?, key: String): Int? {

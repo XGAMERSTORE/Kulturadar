@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import cz.kulturadar.app.data.CzechPlace
 import cz.kulturadar.app.data.EventCache
 import cz.kulturadar.app.data.EventRepository
@@ -335,19 +336,39 @@ private fun ProHeader(place: String, radius: Int, search: String, onSearch: (Str
 
 @Composable
 private fun ProControls(whenValue: ProWhen, onWhen: (ProWhen) -> Unit, type: EventType, onType: (EventType) -> Unit, sort: ProSort, onSort: (ProSort) -> Unit, freeOnly: Boolean, onFree: (Boolean) -> Unit, imageOnly: Boolean, onImage: (Boolean) -> Unit, maxPrice: Int?, onPrice: (Int?) -> Unit, premium: Boolean) {
+    var expanded by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            ProWhen.entries.forEach { item -> FilterChip(selected = whenValue == item, onClick = { onWhen(item) }, label = { Text(item.label) }) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            FilledTonalButton(onClick = { expanded = !expanded }) {
+                Icon(Icons.Default.Tune, null)
+                Spacer(Modifier.width(6.dp))
+                Text(if (expanded) "Skrýt filtry" else "Filtry")
+                Spacer(Modifier.width(4.dp))
+                Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "${whenValue.label} · ${type.title}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            EventType.entries.forEach { item -> FilterChip(selected = type == item, onClick = { onType(item) }, label = { Text(item.title) }) }
-        }
-        if (premium) {
+        if (expanded) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                ProSort.entries.forEach { item -> FilterChip(selected = sort == item, onClick = { onSort(item) }, label = { Text(item.label) }) }
-                FilterChip(selected = freeOnly, onClick = { onFree(!freeOnly) }, label = { Text("Zdarma") }, leadingIcon = { Icon(Icons.Default.MoneyOff, null) })
-                FilterChip(selected = imageOnly, onClick = { onImage(!imageOnly) }, label = { Text("S fotkou") }, leadingIcon = { Icon(Icons.Default.Image, null) })
-                FilterChip(selected = maxPrice != null, onClick = { onPrice(if (maxPrice == null) 1000 else null) }, label = { Text(maxPrice?.let { "Do $it Kč" } ?: "Cena") }, leadingIcon = { Icon(Icons.Default.Payments, null) })
+                ProWhen.entries.forEach { item -> FilterChip(selected = whenValue == item, onClick = { onWhen(item) }, label = { Text(item.label) }) }
+            }
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                EventType.entries.forEach { item -> FilterChip(selected = type == item, onClick = { onType(item) }, label = { Text(item.title) }) }
+            }
+            if (premium) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    ProSort.entries.forEach { item -> FilterChip(selected = sort == item, onClick = { onSort(item) }, label = { Text(item.label) }) }
+                    FilterChip(selected = freeOnly, onClick = { onFree(!freeOnly) }, label = { Text("Zdarma") }, leadingIcon = { Icon(Icons.Default.MoneyOff, null) })
+                    FilterChip(selected = imageOnly, onClick = { onImage(!imageOnly) }, label = { Text("S fotkou") }, leadingIcon = { Icon(Icons.Default.Image, null) })
+                    FilterChip(selected = maxPrice != null, onClick = { onPrice(if (maxPrice == null) 1000 else null) }, label = { Text(maxPrice?.let { "Do $it Kč" } ?: "Cena") }, leadingIcon = { Icon(Icons.Default.Payments, null) })
+                }
             }
         }
     }
@@ -445,9 +466,47 @@ private fun ProBadge(text: String) {
 
 @Composable
 private fun ProImage(e: CulturalEvent, modifier: Modifier = Modifier) {
-    if (!e.imageUrl.isNullOrBlank()) AsyncImage(model = e.imageUrl, contentDescription = e.title, modifier = modifier, contentScale = ContentScale.Crop)
-    else Box(modifier.background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primaryContainer, Color(0xFF102218), Color(0xFF050706)))), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.ImageNotSupported, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(48.dp)); Spacer(Modifier.height(7.dp)); Text("Bez obrázku od pořadatele", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    val url = e.imageUrl?.trim()?.takeIf { it.startsWith("https://", true) }
+    if (url != null) {
+        SubcomposeAsyncImage(
+            model = url,
+            contentDescription = e.title,
+            modifier = modifier,
+            contentScale = ContentScale.Crop,
+            loading = { ProImageFallback(e, Modifier.fillMaxSize(), loading = true) },
+            error = { ProImageFallback(e, Modifier.fillMaxSize(), loading = false) }
+        )
+    } else {
+        ProImageFallback(e, modifier, loading = false)
+    }
+}
+
+@Composable
+private fun ProImageFallback(e: CulturalEvent, modifier: Modifier, loading: Boolean) {
+    Box(
+        modifier.background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primaryContainer, Color(0xFF102218), Color(0xFF050706)))),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (loading) {
+                CircularProgressIndicator(modifier = Modifier.size(34.dp), strokeWidth = 3.dp)
+            } else {
+                Icon(
+                    when (e.type) {
+                        EventType.CONCERT -> Icons.Default.MusicNote
+                        EventType.CINEMA -> Icons.Default.Movie
+                        EventType.THEATRE -> Icons.Default.TheaterComedy
+                        EventType.EXHIBITION -> Icons.Default.Museum
+                        else -> Icons.Default.Event
+                    },
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(48.dp)
+                )
+            }
+            Spacer(Modifier.height(7.dp))
+            Text(if (loading) "Načítám obrázek…" else "Obrázek není dostupný", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

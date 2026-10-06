@@ -46,12 +46,12 @@ class SmsTicketRepository {
         } finally { listingPool.shutdownNow() }
         if (links.isEmpty()) return EventLoadResult(emptyList())
 
-        val pool = Executors.newFixedThreadPool(8)
+        val pool = Executors.newFixedThreadPool(12)
         val parsed = try {
-            links.take(if (requested != null) 120 else 260)
+            links.take(if (requested != null) 36 else 120)
                 .map { url -> Callable { parseDetail(url) } }
                 .map(pool::submit)
-                .mapNotNull { f -> runCatching { f.get(8, TimeUnit.SECONDS) }.getOrNull() }
+                .mapNotNull { f -> runCatching { f.get(4, TimeUnit.SECONDS) }.getOrNull() }
         } finally { pool.shutdownNow() }
 
         val filtered = if (requested == null) parsed else parsed.filter { e ->
@@ -78,7 +78,7 @@ class SmsTicketRepository {
         val time = TIME.find(body)?.value.orEmpty()
         val city = doc.select("a[href*=/akce/]").map { it.text().trim() }.firstOrNull { it.isNotBlank() } ?: inferCity(body)
         val venue = doc.select("a[href*=/mista/]").firstOrNull()?.text()?.trim().orEmpty().ifBlank { "Místo neuvedeno" }
-        val img = doc.selectFirst("meta[property=og:image]")?.attr("content")?.takeIf(String::isNotBlank)
+        val img = bestDocumentImage(doc, url)
         val desc = doc.selectFirst("meta[name=description]")?.attr("content")?.trim().orEmpty().ifBlank { body.take(900) }
         val price = PRICE.find(body)?.groupValues?.getOrNull(1)?.replace(" ", "")?.toIntOrNull()
         return CulturalEvent(
@@ -102,7 +102,7 @@ class SmsTicketRepository {
         val geo = firstObject(location?.opt("geo"))
         val offer = firstObject(j.opt("offers"))
         val body = doc.body().text()
-        val image = image(j.opt("image")) ?: doc.selectFirst("meta[property=og:image]")?.attr("content")?.takeIf(String::isNotBlank)
+        val image = resolveImage(url, image(j.opt("image"))) ?: bestDocumentImage(doc, url)
         val price = offer?.optDouble("price")?.takeIf { !it.isNaN() }?.toInt() ?: PRICE.find(body)?.groupValues?.getOrNull(1)?.replace(" ", "")?.toIntOrNull()
         return CulturalEvent(
             id = "sms-${url.hashCode()}", title = title, subtitle = inferSubtitle(body), type = inferType(body),
@@ -130,6 +130,18 @@ class SmsTicketRepository {
     }
     private fun firstObject(v: Any?): JSONObject? = when(v) { is JSONObject -> v; is JSONArray -> v.optJSONObject(0); else -> null }
     private fun image(v: Any?): String? = when(v) { is String -> v.takeIf(String::isNotBlank); is JSONArray -> v.optString(0).takeIf(String::isNotBlank); is JSONObject -> v.optString("url").takeIf(String::isNotBlank); else -> null }
+    private fun resolveImage(baseUrl: String, raw: String?): String? {
+        val value = raw?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val absolute = runCatching { URL(URL(baseUrl), value).toString() }.getOrNull() ?: value
+        return absolute.replaceFirst("http://", "https://").takeIf { it.startsWith("https://") }
+    }
+    private fun bestDocumentImage(doc: Document, baseUrl: String): String? =
+        resolveImage(baseUrl, doc.selectFirst("meta[property=og:image]")?.attr("content"))
+            ?: resolveImage(baseUrl, doc.selectFirst("meta[name=twitter:image]")?.attr("content"))
+            ?: resolveImage(baseUrl, doc.selectFirst("link[rel=image_src]")?.attr("href"))
+            ?: resolveImage(baseUrl, doc.selectFirst("img[data-src], img[data-lazy-src], img[src]")?.let { img ->
+                img.attr("data-src").ifBlank { img.attr("data-lazy-src") }.ifBlank { img.attr("src") }
+            })
 
     private fun slug(s: String): String = Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD)
         .replace(Regex("\\p{M}+"), "").replace(Regex("[^a-z0-9]+"), "-").trim('-')
@@ -138,7 +150,7 @@ class SmsTicketRepository {
     private fun inferSubtitle(t: String) = when { t.contains("festival", true) -> "Festival"; t.contains("stand-up", true) -> "Stand-up"; t.contains("koncert", true) -> "Koncert"; t.contains("divad", true) -> "Divadlo"; t.contains("kino", true) || t.contains("film", true) -> "Film"; else -> "Akce" }
     private fun inferGenre(t: String): String? = listOf("Rock","Metal","Pop","Jazz","Rap","Hip hop","Elektronika","Techno","Punk","Folk","Stand-up","Komedie").firstOrNull { t.contains(it, true) }
     private fun key(e: CulturalEvent) = "${e.title.lowercase()}|${e.dateLabel}|${e.city.lowercase()}"
-    private fun connect(url: String): Document = Jsoup.connect(url).userAgent("Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Kulturadar/2.2").timeout(8000).followRedirects(true).maxBodySize(3_000_000).get()
+    private fun connect(url: String): Document = Jsoup.connect(url).userAgent("Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Kulturadar/1.0").timeout(4500).followRedirects(true).maxBodySize(2_000_000).get()
 
     companion object {
         private val CZ_DATE = Regex("\\b(\\d{1,2})\\.(\\d{1,2})\\.(20\\d{2})\\b")

@@ -7,6 +7,9 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 data class EventLoadResult(
     val events: List<CulturalEvent>,
@@ -21,10 +24,19 @@ class EventRepository {
     fun demoEvents(): List<CulturalEvent> = bootstrapEvents()
 
     fun loadAllSources(apiKey: String, city: String?, keyword: String?): EventLoadResult {
-        val goOutResult = goOut.load(null, keyword)
-        val publicResult = publicSources.load(null, keyword)
-        val smsResult = smsTicket.load(city)
-        val ticketResult = if (apiKey.isNotBlank()) loadTicketmaster(apiKey, city, keyword) else EventLoadResult(emptyList())
+        val pool = Executors.newFixedThreadPool(4)
+        val goFuture = pool.submit(Callable { goOut.load(city, keyword) })
+        val publicFuture = pool.submit(Callable { publicSources.load(city, keyword) })
+        val smsFuture = pool.submit(Callable { smsTicket.load(city) })
+        val ticketFuture = pool.submit(Callable { if (apiKey.isNotBlank()) loadTicketmaster(apiKey, city, keyword) else EventLoadResult(emptyList()) })
+        pool.shutdown()
+        runCatching { pool.awaitTermination(7, TimeUnit.SECONDS) }
+        if (!pool.isTerminated) pool.shutdownNow()
+
+        val goOutResult = if (goFuture.isDone && !goFuture.isCancelled) runCatching { goFuture.get() }.getOrElse { EventLoadResult(emptyList(), "GoOut se nepodařilo načíst.") } else EventLoadResult(emptyList(), "GoOut neodpověděl včas.")
+        val publicResult = if (publicFuture.isDone && !publicFuture.isCancelled) runCatching { publicFuture.get() }.getOrElse { EventLoadResult(emptyList(), "Veřejné kalendáře se nepodařilo načíst.") } else EventLoadResult(emptyList(), "Veřejné kalendáře neodpověděly včas.")
+        val smsResult = if (smsFuture.isDone && !smsFuture.isCancelled) runCatching { smsFuture.get() }.getOrElse { EventLoadResult(emptyList(), "SMSticket se nepodařilo načíst.") } else EventLoadResult(emptyList(), "SMSticket neodpověděl včas.")
+        val ticketResult = if (ticketFuture.isDone && !ticketFuture.isCancelled) runCatching { ticketFuture.get() }.getOrElse { EventLoadResult(emptyList(), "Ticketmaster se nepodařilo načíst.") } else EventLoadResult(emptyList(), "Ticketmaster neodpověděl včas.")
 
         val merged = (goOutResult.events + publicResult.events + smsResult.events + ticketResult.events)
             .filter { it.dateLabel.isNotBlank() }

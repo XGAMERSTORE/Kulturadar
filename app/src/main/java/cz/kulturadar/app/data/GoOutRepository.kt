@@ -62,14 +62,14 @@ class GoOutRepository {
                 href.takeIf { it.contains("goout.net/") && EVENT_LINK.containsMatchIn(it) }
             }
             .distinct()
-            .take(30)
+            .take(18)
 
         if (links.isEmpty()) return emptyList()
 
         val pool = Executors.newFixedThreadPool(6)
         return try {
             val futures = links.map { url -> Callable { loadEvent(url, city) } }.map(pool::submit)
-            futures.mapNotNull { future -> runCatching { future.get(8, TimeUnit.SECONDS) }.getOrNull() }
+            futures.mapNotNull { future -> runCatching { future.get(4, TimeUnit.SECONDS) }.getOrNull() }
         } finally {
             pool.shutdownNow()
         }
@@ -253,7 +253,7 @@ class GoOutRepository {
     private fun connect(url: String): Document = Jsoup.connect(url)
         .userAgent("Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Kulturadar/1.8")
         .referrer("https://www.google.com/")
-        .timeout(7000)
+        .timeout(4500)
         .followRedirects(true)
         .get()
 
