@@ -17,62 +17,67 @@ import java.util.concurrent.TimeUnit
 /**
  * Best-effort aggregator over public Czech event calendars.
  * No API key is required. Sources are isolated: one broken/blocked site never breaks the feed.
- * We prefer schema.org Event JSON-LD and only follow a small bounded set of event-like links.
+ * Local calendars carry a fallback city so their events are not discarded when JSON-LD omits locality.
  */
 class PublicEventSourcesRepository {
-    private data class Source(val name: String, val url: String)
+    private data class Source(val name: String, val url: String, val fallbackCity: String? = null)
 
     private val sources = listOf(
         Source("Kudy z nudy", "https://www.kudyznudy.cz/akce"),
         Source("Informuji.cz", "https://www.informuji.cz/akce/"),
-        Source("CityBee", "https://www.citybee.cz/kalendar-akci/"),
+        Source("CityBee", "https://www.citybee.cz/kalendar-akci/", "Praha"),
         Source("SMSticket", "https://www.smsticket.cz/vstupenky"),
         Source("Ticketportal", "https://www.ticketportal.cz/"),
         Source("Ticketstream", "https://www.ticketstream.cz/"),
         Source("TicketLIVE", "https://www.ticketlive.cz/"),
         Source("ColosseumTicket", "https://www.colosseumticket.cz/"),
-        Source("Prague City Tourism", "https://www.prague.eu/cs/akce/"),
-        Source("Praha.eu", "https://praha.eu/web/praha/kalendar-akci"),
-        Source("OstravaInfo", "https://www.ostravainfo.cz/cz/akce/"),
-        Source("Slezská Ostrava", "https://slezska.ostrava.cz/cs/o-slezske-ostrave/kalendar-akci"),
-        Source("GoToBrno", "https://www.gotobrno.cz/akce/"),
-        Source("Olomouc Tourism", "https://tourism.olomouc.eu/akce/"),
-        Source("Visit Plzeň", "https://www.visitplzen.eu/akce/"),
-        Source("Liberec", "https://www.liberec.cz/cz/obcan/aktuality/akce/"),
-        Source("HKinfo", "https://www.hkinfo.cz/cs/kalendar-akci"),
-        Source("Pardubice", "https://www.pardubice.eu/volny-cas/kalendar-akci/"),
-        Source("Zlín", "https://www.zlin.eu/kalendar-akci"),
-        Source("Karlovy Vary", "https://www.karlovyvary.cz/cs/kalendar-akci"),
-        Source("Budejce.cz", "https://www.budejce.cz/kalendar-akci"),
-        Source("Ústí nad Labem", "https://www.usti.cz/cz/volny-cas/kalendar-akci/"),
+        Source("Prague City Tourism", "https://www.prague.eu/cs/akce/", "Praha"),
+        Source("Praha.eu", "https://praha.eu/web/praha/kalendar-akci", "Praha"),
+        Source("OstravaInfo", "https://www.ostravainfo.cz/cz/akce/", "Ostrava"),
+        Source("Slezská Ostrava", "https://slezska.ostrava.cz/cs/o-slezske-ostrave/kalendar-akci", "Ostrava"),
+        Source("GoToBrno", "https://www.gotobrno.cz/akce/", "Brno"),
+        Source("Olomouc Tourism", "https://tourism.olomouc.eu/akce/", "Olomouc"),
+        Source("Visit Plzeň", "https://www.visitplzen.eu/akce/", "Plzeň"),
+        Source("Liberec", "https://www.liberec.cz/cz/obcan/aktuality/akce/", "Liberec"),
+        Source("HKinfo", "https://www.hkinfo.cz/cs/kalendar-akci", "Hradec Králové"),
+        Source("Pardubice", "https://www.pardubice.eu/volny-cas/kalendar-akci/", "Pardubice"),
+        Source("Zlín", "https://www.zlin.eu/kalendar-akci", "Zlín"),
+        Source("Karlovy Vary", "https://www.karlovyvary.cz/cs/kalendar-akci", "Karlovy Vary"),
+        Source("Budejce.cz", "https://www.budejce.cz/kalendar-akci", "České Budějovice"),
+        Source("Ústí nad Labem", "https://www.usti.cz/cz/volny-cas/kalendar-akci/", "Ústí nad Labem"),
         Source("VisitCzechia", "https://www.visitczechia.com/en-US/Things-to-Do/Events")
     )
 
     fun load(city: String?, keyword: String?): EventLoadResult {
-        val pool = Executors.newFixedThreadPool(6)
+        val pool = Executors.newFixedThreadPool(7)
         return try {
             val futures = sources.map { source -> Callable { loadSource(source) } }.map(pool::submit)
             val all = futures.flatMap { future ->
-                runCatching { future.get(14, TimeUnit.SECONDS) }.getOrElse { emptyList() }
+                runCatching { future.get(15, TimeUnit.SECONDS) }.getOrElse { emptyList() }
             }
             val requestedCity = city?.takeIf { it.isNotBlank() && it != "Všechna města" }
             val q = keyword.orEmpty().trim()
             val filtered = all.asSequence()
-                .filter { e -> requestedCity == null || e.city.contains(requestedCity, true) || requestedCity.contains(e.city, true) }
-                .filter { e -> q.isBlank() || listOf(e.title, e.subtitle, e.venue, e.city, e.genre.orEmpty()).any { it.contains(q, true) } }
+                .filter { e -> requestedCity == null || cityMatches(e, requestedCity) }
+                .filter { e -> q.isBlank() || listOf(e.title, e.subtitle, e.venue, e.city, e.genre.orEmpty(), e.description).any { it.contains(q, true) } }
                 .distinctBy(::canonicalKey)
-                .take(450)
+                .take(650)
                 .toList()
-            EventLoadResult(filtered, if (filtered.isEmpty()) "Ve veřejných kalendářích se pro tento výběr nic dalšího nenašlo." else null)
+            EventLoadResult(filtered, if (filtered.isEmpty() && all.isEmpty()) "Veřejné kalendáře se teď nepodařilo načíst." else null)
         } finally {
             pool.shutdownNow()
         }
     }
 
+    private fun cityMatches(e: CulturalEvent, requested: String): Boolean {
+        if (e.city.equals("Česko", true)) return e.venue.contains(requested, true) || e.description.contains(requested, true)
+        return e.city.contains(requested, true) || requested.contains(e.city, true) || e.venue.contains(requested, true)
+    }
+
     private fun loadSource(source: Source): List<CulturalEvent> {
         val listing = runCatching { connect(source.url) }.getOrNull() ?: return emptyList()
         val direct = parseEvents(listing, source, source.url)
-        if (direct.size >= 8) return direct.take(40)
+        if (direct.size >= 10) return direct.take(60)
 
         val host = runCatching { URL(source.url).host.removePrefix("www.") }.getOrDefault("")
         val links = listing.select("a[href]").asSequence()
@@ -87,14 +92,18 @@ class PublicEventSourcesRepository {
                 }
             }
             .distinct()
-            .take(14)
+            .take(30)
             .toList()
 
-        val details = links.flatMap { url ->
-            val doc = runCatching { connect(url) }.getOrNull() ?: return@flatMap emptyList()
-            parseEvents(doc, source, url)
-        }
-        return (direct + details).distinctBy(::canonicalKey).take(50)
+        val detailPool = Executors.newFixedThreadPool(5)
+        val details = try {
+            links.map { url -> Callable {
+                val doc = runCatching { connect(url) }.getOrNull() ?: return@Callable emptyList<CulturalEvent>()
+                parseEvents(doc, source, url)
+            } }.map(detailPool::submit).flatMap { f -> runCatching { f.get(8, TimeUnit.SECONDS) }.getOrElse { emptyList() } }
+        } finally { detailPool.shutdownNow() }
+
+        return (direct + details).distinctBy(::canonicalKey).take(90)
     }
 
     private fun parseEvents(doc: Document, source: Source, pageUrl: String): List<CulturalEvent> {
@@ -135,11 +144,13 @@ class PublicEventSourcesRepository {
         val address = firstObject(location?.opt("address"))
         val city = address?.optString("addressLocality").orEmpty()
             .ifBlank { address?.optString("addressRegion").orEmpty() }
+            .ifBlank { source.fallbackCity.orEmpty() }
+            .ifBlank { inferCityFromDocument(doc) }
             .ifBlank { "Česko" }
-        val venue = location?.optString("name").orEmpty().ifBlank { "Místo neuvedeno" }
+        val venue = location?.optString("name").orEmpty().ifBlank { inferVenue(doc, source.fallbackCity) }
         val geo = firstObject(location?.opt("geo"))
         val offer = firstObject(json.opt("offers"))
-        val text = listOf(title, json.optString("description"), doc.title()).joinToString(" ")
+        val text = listOf(title, json.optString("description"), doc.title(), source.name).joinToString(" ")
         val price = numberInt(offer, "lowPrice") ?: numberInt(offer, "price")
         val maxPrice = numberInt(offer, "highPrice")
         val url = json.optString("url").takeIf { it.startsWith("http") } ?: pageUrl
@@ -175,6 +186,16 @@ class PublicEventSourcesRepository {
             currency = offer?.optString("priceCurrency")?.takeIf(String::isNotBlank),
             salesStart = offer?.optString("validFrom")?.takeIf(String::isNotBlank)
         )
+    }
+
+    private fun inferVenue(doc: Document, fallbackCity: String?): String {
+        val h = doc.selectFirst("[itemprop=location], [class*=venue], [class*=place]")?.text()?.trim().orEmpty()
+        return h.takeIf { it.length in 2..120 && !it.equals(fallbackCity, true) } ?: "Místo neuvedeno"
+    }
+
+    private fun inferCityFromDocument(doc: Document): String {
+        val text = listOf(doc.title(), doc.selectFirst("meta[name=description]")?.attr("content").orEmpty()).joinToString(" ")
+        return KNOWN_CITIES.firstOrNull { text.contains(it, true) }.orEmpty()
     }
 
     private fun firstObject(value: Any?): JSONObject? = when (value) {
@@ -240,14 +261,19 @@ class PublicEventSourcesRepository {
         "${event.title.lowercase().replace(Regex("\\s+"), " ").trim()}|${event.dateLabel}|${event.city.lowercase()}"
 
     private fun connect(url: String): Document = Jsoup.connect(url)
-        .userAgent("Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Kulturadar/2.1")
+        .userAgent("Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Kulturadar/2.2")
         .referrer("https://www.google.com/")
-        .timeout(6500)
+        .timeout(7000)
         .followRedirects(true)
-        .maxBodySize(2_500_000)
+        .maxBodySize(3_000_000)
         .get()
 
     companion object {
         private val EVENTISH = Regex("(akce|event|program|kalendar|calendar|vstupenk|ticket|koncert|festival|divad|kino|detail)")
+        private val KNOWN_CITIES = listOf(
+            "Praha", "Brno", "Ostrava", "Plzeň", "Olomouc", "Liberec", "Hradec Králové", "Pardubice", "Zlín", "České Budějovice",
+            "Ústí nad Labem", "Jihlava", "Karlovy Vary", "Opava", "Frýdek-Místek", "Karviná", "Havířov", "Třinec", "Kladno",
+            "Mladá Boleslav", "Most", "Teplice", "Děčín", "Chomutov", "Jablonec nad Nisou", "Znojmo", "Přerov", "Prostějov", "Šumperk", "Vsetín"
+        )
     }
 }
