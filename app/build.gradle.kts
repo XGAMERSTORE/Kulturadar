@@ -15,7 +15,6 @@ android {
         versionCode = 11
         versionName = "2.1.1"
         // Legacy compatibility flag for older unused UI files. All user-facing features are free.
-        buildConfigField("boolean", "INTERNAL_PREMIUM", "true")
     }
 
     buildTypes {
