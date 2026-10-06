@@ -12,9 +12,8 @@ android {
         applicationId = "cz.kulturadar.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 9
-        versionName = "2.0.0"
-        buildConfigField("boolean", "INTERNAL_PREMIUM", "true")
+        versionCode = 10
+        versionName = "2.1.0"
     }
 
     buildTypes {

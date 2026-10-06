@@ -15,6 +15,7 @@ data class EventLoadResult(
 
 class EventRepository {
     private val goOut = GoOutRepository()
+    private val publicSources = PublicEventSourcesRepository()
 
     /**
      * Real cached bootstrap cards from the previous Kulturadar approach.
@@ -24,9 +25,10 @@ class EventRepository {
 
     fun loadAllSources(apiKey: String, city: String?, keyword: String?): EventLoadResult {
         val goOutResult = goOut.load(city, keyword)
+        val publicResult = publicSources.load(city, keyword)
         val ticketResult = if (apiKey.isNotBlank()) loadTicketmaster(apiKey, city, keyword) else EventLoadResult(emptyList())
 
-        val merged = (goOutResult.events + ticketResult.events)
+        val merged = (goOutResult.events + publicResult.events + ticketResult.events)
             .distinctBy { canonicalKey(it) }
             .sortedBy { it.dateLabel + it.timeLabel }
 

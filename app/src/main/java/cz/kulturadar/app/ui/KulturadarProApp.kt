@@ -35,7 +35,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import cz.kulturadar.app.BuildConfig
 import cz.kulturadar.app.data.CzechPlace
 import cz.kulturadar.app.data.EventCache
 import cz.kulturadar.app.data.EventRepository
@@ -184,7 +183,7 @@ private fun ProMain(onChangePlace: () -> Unit) {
     val cache = remember { EventCache(context) }
     val reactions = remember { ReactionStore(context) }
     val scope = rememberCoroutineScope()
-    val premium = BuildConfig.INTERNAL_PREMIUM
+    val premium = true // all features are free
 
     val home = prefs.getString("home_place", "Ostrava") ?: "Ostrava"
     val homeDetail = prefs.getString("home_place_detail", "") ?: ""
@@ -323,7 +322,6 @@ private fun ProHeader(place: String, radius: Int, search: String, onSearch: (Str
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Kulturadar", fontSize = 34.sp, fontWeight = FontWeight.Black, letterSpacing = (-1).sp)
-                    if (premium) { Spacer(Modifier.width(8.dp)); Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(9.dp)) { Text("PREMIUM", Modifier.padding(7.dp, 3.dp), color = MaterialTheme.colorScheme.primary, fontSize = 9.sp, fontWeight = FontWeight.Black) } }
                 }
                 Text("$place · do $radius km", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -507,14 +505,6 @@ private fun ProSettings(place: String, detail: String, radius: Int, onRadius: (I
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 20.dp), contentPadding = PaddingValues(top = 20.dp, bottom = 120.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { Text("Nastavení", fontSize = 32.sp, fontWeight = FontWeight.Black) }
         item {
-            Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.WorkspacePremium, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(8.dp)); Text("Premium aktivní", fontSize = 21.sp, fontWeight = FontWeight.Black) }
-                    Text("Smart řazení podle toho, co ukládáš, vzdálenost, cenové filtry, víkendové tipy, náhodný tip, offline cache a rychlé plánování.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-        item {
             Text("Domovská lokalita", fontWeight = FontWeight.Bold)
             Text(place, color = MaterialTheme.colorScheme.primary, fontSize = 22.sp, fontWeight = FontWeight.Black)
             if (detail.isNotBlank()) Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -535,11 +525,11 @@ private fun ProSettings(place: String, detail: String, radius: Int, onRadius: (I
         }
         item {
             Text("Zdroje akcí", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text("GoOut funguje bez API. Ticketmaster je pouze volitelný doplňkový zdroj.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("GoOut + více než 20 veřejných kalendářů funguje bez API. Ticketmaster je jen volitelný doplněk.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(apiKey, onApiKey, label = { Text("Ticketmaster API key (volitelné)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(8.dp)); Button(onClick = onSaveApi, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Sync, null); Spacer(Modifier.width(7.dp)); Text("Uložit a obnovit zdroje") }
         }
-        item { Text("Kulturadar 2.0", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { Text("Kulturadar 2.1 · vše zdarma", color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }
 
