@@ -16,23 +16,25 @@ data class EventLoadResult(
 class EventRepository {
     private val goOut = GoOutRepository()
     private val publicSources = PublicEventSourcesRepository()
+    private val smsTicket = SmsTicketRepository()
 
-    /**
-     * Real cached bootstrap cards from the previous Kulturadar approach.
-     * They are only used if all live public sources fail, so a fresh install is not an empty shell.
-     */
     fun demoEvents(): List<CulturalEvent> = bootstrapEvents()
 
     fun loadAllSources(apiKey: String, city: String?, keyword: String?): EventLoadResult {
         val goOutResult = goOut.load(city, keyword)
         val publicResult = publicSources.load(city, keyword)
+        val smsResult = smsTicket.load(city)
         val ticketResult = if (apiKey.isNotBlank()) loadTicketmaster(apiKey, city, keyword) else EventLoadResult(emptyList())
 
-        val merged = (goOutResult.events + publicResult.events + ticketResult.events)
+        val merged = (goOutResult.events + publicResult.events + smsResult.events + ticketResult.events)
+            .filter { it.dateLabel.isNotBlank() }
             .distinctBy { canonicalKey(it) }
             .sortedBy { it.dateLabel + it.timeLabel }
 
-        if (merged.isNotEmpty()) return EventLoadResult(merged)
+        if (merged.isNotEmpty()) {
+            val errors = listOfNotNull(goOutResult.error, publicResult.error, smsResult.error, ticketResult.error).distinct()
+            return EventLoadResult(merged, errors.takeIf { it.isNotEmpty() }?.joinToString(" · "))
+        }
 
         val fallback = bootstrapEvents()
             .filter { city.isNullOrBlank() || city == "Všechna města" || it.city.equals(city, true) }
@@ -40,16 +42,16 @@ class EventRepository {
 
         return EventLoadResult(
             fallback,
-            when {
-                fallback.isNotEmpty() -> "Živý zdroj teď neodpověděl. Zobrazuji poslední ověřený GoOut výběr, dokud se data neobnoví."
-                goOutResult.error != null -> goOutResult.error
-                ticketResult.error != null -> ticketResult.error
-                else -> "Pro tento výběr nejsou dostupné žádné akce."
+            if (fallback.isNotEmpty()) {
+                "Veřejné zdroje teď neodpověděly. Zobrazuji uložený ověřený výběr a zkusím je znovu při obnovení."
+            } else {
+                listOfNotNull(goOutResult.error, publicResult.error, smsResult.error, ticketResult.error).distinct().joinToString(" · ").ifBlank {
+                    "Pro tento výběr nejsou právě dostupná data."
+                }
             }
         )
     }
 
-    /** Compatibility wrapper for older UI code. */
     fun ticketmaster(apiKey: String, city: String?, keyword: String?): List<CulturalEvent> =
         loadTicketmaster(apiKey, city, keyword).events
 
@@ -73,7 +75,7 @@ class EventRepository {
             readTimeout = 12000
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "Kulturadar/1.8 Android")
+            setRequestProperty("User-Agent", "Kulturadar/2.2 Android")
         }
 
         return try {
@@ -83,8 +85,7 @@ class EventRepository {
             if (code !in 200..299) return EventLoadResult(emptyList(), "Ticketmaster vrátil chybu $code.")
 
             val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-            val arr = root.optJSONObject("_embedded")?.optJSONArray("events")
-                ?: return EventLoadResult(emptyList())
+            val arr = root.optJSONObject("_embedded")?.optJSONArray("events") ?: return EventLoadResult(emptyList())
 
             val parsed = buildList {
                 for (i in 0 until arr.length()) {
@@ -122,10 +123,7 @@ class EventRepository {
                             timeLabel = start?.optString("localTime").orEmpty().take(5),
                             priceCzk = priceMin,
                             imageUrl = image?.url,
-                            description = e.optString("info")
-                                .ifBlank { e.optString("pleaseNote") }
-                                .ifBlank { e.optString("description") }
-                                .ifBlank { "Podrobnosti jsou dostupné u pořadatele." },
+                            description = e.optString("info").ifBlank { e.optString("pleaseNote") }.ifBlank { e.optString("description") }.ifBlank { "Podrobnosti jsou dostupné u pořadatele." },
                             ticketUrl = e.optString("url").takeIf(String::isNotBlank),
                             source = "Ticketmaster",
                             genre = genre ?: subGenre,
@@ -167,32 +165,12 @@ class EventRepository {
         goOutSnapshot("strihavka", "Kamil Střihavka: 40 let na scéně", "Rock · pop", EventType.CONCERT, "Ostrava", "Barrák", "2026-11-26", "19:30", 790, "https://goout.net/en/kamil-strihavka-40-let-na-scene/szcaqiy/")
     )
 
-    private fun goOutSnapshot(
-        id: String,
-        title: String,
-        subtitle: String,
-        type: EventType,
-        city: String,
-        venue: String,
-        date: String,
-        time: String,
-        price: Int?,
-        url: String
-    ) = CulturalEvent(
-        id = "snapshot-$id",
-        title = title,
-        subtitle = subtitle,
-        type = type,
-        city = city,
-        venue = venue,
-        dateLabel = date,
-        timeLabel = time,
-        priceCzk = price,
+    private fun goOutSnapshot(id: String, title: String, subtitle: String, type: EventType, city: String, venue: String, date: String, time: String, price: Int?, url: String) = CulturalEvent(
+        id = "snapshot-$id", title = title, subtitle = subtitle, type = type, city = city, venue = venue,
+        dateLabel = date, timeLabel = time, priceCzk = price,
         imageUrl = "https://api.microlink.io/?url=${enc(url)}&embed=image.url",
         description = "Ověřená akce z GoOut. Při připojení Kulturadar načte živou verzi a aktuální detaily.",
-        ticketUrl = url,
-        source = "GoOut · offline výběr",
-        genre = subtitle
+        ticketUrl = url, source = "GoOut · offline výběr", genre = subtitle
     )
 
     private fun canonicalKey(event: CulturalEvent): String =
@@ -224,9 +202,7 @@ class EventRepository {
         return best
     }
 
-    private fun String?.cleanClassification(): String? = this
-        ?.trim()
-        ?.takeIf { it.isNotBlank() && !it.equals("Undefined", true) && !it.equals("Miscellaneous", true) }
+    private fun String?.cleanClassification(): String? = this?.trim()?.takeIf { it.isNotBlank() && !it.equals("Undefined", true) && !it.equals("Miscellaneous", true) }
 
     private fun mapType(segment: String, genre: String?, subGenre: String?): EventType {
         val text = listOf(segment, genre, subGenre).joinToString(" ")
