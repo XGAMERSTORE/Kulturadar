@@ -21,8 +21,8 @@ class EventRepository {
     fun demoEvents(): List<CulturalEvent> = bootstrapEvents()
 
     fun loadAllSources(apiKey: String, city: String?, keyword: String?): EventLoadResult {
-        val goOutResult = goOut.load(city, keyword)
-        val publicResult = publicSources.load(city, keyword)
+        val goOutResult = goOut.load(null, keyword)
+        val publicResult = publicSources.load(null, keyword)
         val smsResult = smsTicket.load(city)
         val ticketResult = if (apiKey.isNotBlank()) loadTicketmaster(apiKey, city, keyword) else EventLoadResult(emptyList())
 

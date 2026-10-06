@@ -12,8 +12,8 @@ android {
         applicationId = "cz.kulturadar.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 11
-        versionName = "2.1.1"
+        versionCode = 12
+        versionName = "2.2.0"
         // Legacy compatibility flag for older unused UI files. All user-facing features are free.
     }
 

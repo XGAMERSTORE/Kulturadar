@@ -217,15 +217,16 @@ private fun ProMain(onChangePlace: () -> Unit) {
         loading = true
         message = null
         scope.launch {
-            val result = withContext(Dispatchers.IO) { repo.loadAllSources(apiKey.trim(), "Všechna města", null) }
+            val result = withContext(Dispatchers.IO) { repo.loadAllSources(apiKey.trim(), home, null) }
             val nearby = result.events.filter { e -> distance(e)?.let { it <= radius } ?: e.city.equals(home, true) }
             if (nearby.isNotEmpty()) {
                 events = nearby
                 withContext(Dispatchers.IO) { cache.save(nearby) }
             }
             message = when {
+                nearby.isEmpty() && result.events.isNotEmpty() -> "Zdroje jsou načtené, ale pro zvolený okruh se nepodařilo určit žádnou odpovídající akci. Zkus větší okruh nebo jiné filtry."
                 nearby.isEmpty() && events.isNotEmpty() -> "Živá data se teď nepodařila obnovit. Zobrazuji poslední uložené akce."
-                nearby.isEmpty() -> "V okruhu $radius km od $home teď nic není. Zkus větší vzdálenost."
+                nearby.isEmpty() -> "V okruhu $radius km od $home se teď nepodařilo načíst žádné akce."
                 else -> result.error
             }
             loading = false
