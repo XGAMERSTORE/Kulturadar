@@ -1,0 +1,64 @@
+name: Fix nationwide Czech search
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-search-cz.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Patch nationwide discovery
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          ui = Path('app/src/main/java/cz/kulturadar/app/ui/KulturadarProApp.kt')
+          s = ui.read_text()
+          old = 'val result = withContext(Dispatchers.IO) { repo.loadAllSources(apiKey.trim(), "Všechna města", null) }'
+          new = 'val result = withContext(Dispatchers.IO) { repo.loadAllSources(apiKey.trim(), home, null) }'
+          if old not in s:
+              raise SystemExit('refresh source call not found')
+          s = s.replace(old, new, 1)
+          old_msg = '''message = when {
+                nearby.isEmpty() && events.isNotEmpty() -> "Živá data se teď nepodařila obnovit. Zobrazuji poslední uložené akce."
+                nearby.isEmpty() -> "V okruhu $radius km od $home teď nic není. Zkus větší vzdálenost."
+                else -> result.error
+            }'''
+          new_msg = '''message = when {
+                nearby.isEmpty() && result.events.isNotEmpty() -> "Zdroje jsou načtené, ale pro zvolený okruh se nepodařilo určit žádnou odpovídající akci. Zkus větší okruh nebo jiné filtry."
+                nearby.isEmpty() && events.isNotEmpty() -> "Živá data se teď nepodařila obnovit. Zobrazuji poslední uložené akce."
+                nearby.isEmpty() -> "V okruhu $radius km od $home se teď nepodařilo načíst žádné akce."
+                else -> result.error
+            }'''
+          if old_msg not in s:
+              raise SystemExit('message block not found')
+          s = s.replace(old_msg, new_msg, 1)
+          ui.write_text(s)
+
+          repo = Path('app/src/main/java/cz/kulturadar/app/data/EventRepository.kt')
+          r = repo.read_text()
+          r = r.replace('val goOutResult = goOut.load(city, keyword)', 'val goOutResult = goOut.load(null, keyword)', 1)
+          r = r.replace('val publicResult = publicSources.load(city, keyword)', 'val publicResult = publicSources.load(null, keyword)', 1)
+          repo.write_text(r)
+
+          gradle = Path('app/build.gradle.kts')
+          g = gradle.read_text()
+          g = g.replace('versionCode = 11', 'versionCode = 12', 1)
+          g = g.replace('versionName = "2.1.1"', 'versionName = "2.2.0"', 1)
+          gradle.write_text(g)
+          PY
+      - name: Commit fixes
+        run: |
+          git config user.name XGAMERSTORE
+          git config user.email 73636097+XGAMERSTORE@users.noreply.github.com
+          git add app/src/main/java/cz/kulturadar/app/ui/KulturadarProApp.kt app/src/main/java/cz/kulturadar/app/data/EventRepository.kt app/build.gradle.kts
+          git commit -m "Fix nationwide Czech event discovery and radius search"
+          git push
