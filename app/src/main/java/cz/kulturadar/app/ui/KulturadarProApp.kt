@@ -176,6 +176,7 @@ private fun ProSetup(onDone: (CzechPlace, Int, ProMode) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ProMain(onChangePlace: () -> Unit) {
     val context = LocalContext.current
