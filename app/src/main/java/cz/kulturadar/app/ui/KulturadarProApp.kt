@@ -194,6 +194,7 @@ private fun ProMain(onChangePlace: () -> Unit) {
     var radius by remember { mutableIntStateOf(prefs.getInt("radius_km", 30)) }
     var mode by remember { mutableStateOf(if (prefs.getString("view_mode", "swipe") == "cards") ProMode.LIST else ProMode.SWIPE) }
     var tab by remember { mutableStateOf(ProTab.DISCOVER) }
+    var showFilters by remember { mutableStateOf(false) }
     var events by remember { mutableStateOf(cache.load().ifEmpty { repo.demoEvents() }) }
     var search by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf(prefs.getString("tm_key", "") ?: "") }
@@ -298,8 +299,7 @@ private fun ProMain(onChangePlace: () -> Unit) {
             selected != null -> ProDetail(selected!!, reactions.get(selected!!.id), distance(selected!!), onBack = { selected = null }, onReact = { reactions.set(selected!!.id, it); tick++ }, modifier = Modifier.padding(padding))
             tab == ProTab.SETTINGS -> ProSettings(home, homeDetail, radius, { radius = it; prefs.edit().putInt("radius_km", it).apply() }, mode, { mode = it; prefs.edit().putString("view_mode", it.key).apply() }, apiKey, { apiKey = it }, { prefs.edit().putString("tm_key", apiKey.trim()).apply(); refresh() }, onChangePlace, modifier = Modifier.padding(padding))
             else -> Column(Modifier.padding(padding).fillMaxSize()) {
-                ProHeader(home, radius, search, { search = it }, loading, ::refresh, premium)
-                ProControls(whenFilter, { whenFilter = it }, type, { type = it }, sort, { sort = it }, freeOnly, { freeOnly = it }, onlyWithImage, { onlyWithImage = it }, maxPrice, { maxPrice = it }, premium)
+                ProHeader(home, radius, search, { search = it }, loading, ::refresh, premium, { showFilters = true }, { tab = ProTab.SETTINGS })
                 message?.let { ProMessage(it) }
                 if (visible.isNotEmpty() && tab == ProTab.DISCOVER) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -315,10 +315,22 @@ private fun ProMain(onChangePlace: () -> Unit) {
             }
         }
     }
+    if (showFilters) {
+        ModalBottomSheet(onDismissRequest = { showFilters = false }) {
+            Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Filtry akcí", fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { showFilters = false }) { Icon(Icons.Default.Close, "Zavřít") }
+                }
+                ProControls(whenFilter, { whenFilter = it }, type, { type = it }, sort, { sort = it }, freeOnly, { freeOnly = it }, onlyWithImage, { onlyWithImage = it }, maxPrice, { maxPrice = it }, premium)
+                Button(onClick = { showFilters = false }, modifier = Modifier.fillMaxWidth().padding(20.dp)) { Text("Zobrazit akce") }
+            }
+        }
+    }
 }
 
 @Composable
-private fun ProHeader(place: String, radius: Int, search: String, onSearch: (String) -> Unit, loading: Boolean, onRefresh: () -> Unit, premium: Boolean) {
+private fun ProHeader(place: String, radius: Int, search: String, onSearch: (String) -> Unit, loading: Boolean, onRefresh: () -> Unit, premium: Boolean, onFilters: () -> Unit, onSettings: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(18.dp, 14.dp, 18.dp, 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -327,6 +339,8 @@ private fun ProHeader(place: String, radius: Int, search: String, onSearch: (Str
                 }
                 Text("$place · do $radius km", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            IconButton(onClick = onFilters) { Icon(Icons.Default.Tune, "Filtry") }
+            IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Nastavení") }
             IconButton(onClick = onRefresh, enabled = !loading) { Icon(Icons.Default.Refresh, "Obnovit") }
         }
         OutlinedTextField(value = search, onValueChange = onSearch, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Akce, interpret, místo…") }, shape = RoundedCornerShape(24.dp))
@@ -336,7 +350,7 @@ private fun ProHeader(place: String, radius: Int, search: String, onSearch: (Str
 
 @Composable
 private fun ProControls(whenValue: ProWhen, onWhen: (ProWhen) -> Unit, type: EventType, onType: (EventType) -> Unit, sort: ProSort, onSort: (ProSort) -> Unit, freeOnly: Boolean, onFree: (Boolean) -> Unit, imageOnly: Boolean, onImage: (Boolean) -> Unit, maxPrice: Int?, onPrice: (Int?) -> Unit, premium: Boolean) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(true) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             FilledTonalButton(onClick = { expanded = !expanded }) {
@@ -438,7 +452,7 @@ private fun ProList(events: List<CulturalEvent>, reactions: ReactionStore, dista
         items(events, key = { it.id }) { e ->
             val r = reactions.get(e.id)
             Card(Modifier.fillMaxWidth().clickable { onOpen(e) }, shape = RoundedCornerShape(28.dp)) {
-                Box(Modifier.fillMaxWidth().height(250.dp)) {
+                Box(Modifier.fillMaxWidth().height(180.dp)) {
                     ProImage(e, Modifier.fillMaxSize())
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xF0050507)))))
                     Row(Modifier.align(Alignment.TopStart).padding(13.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
