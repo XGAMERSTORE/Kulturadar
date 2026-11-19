@@ -12,6 +12,9 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.*;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
+import org.json.JSONObject;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -76,6 +79,7 @@ public class MainActivity extends Activity {
         root.addView(text("Téma na dnešek",25,Color.rgb(190,190,190)));
         status=text("Načítám internetové novinky…",12,DIM);root.addView(status);
         Button update=button("Obnovit novinky");update.setOnClickListener(v->refresh());root.addView(update);
+        Button aiSettings=button("AI • nastavit zabezpečený server");aiSettings.setOnClickListener(v->configureAi());root.addView(aiSettings);
         Button generate=button("Vygenerovat nové téma");generate.setOnClickListener(v->generateIdea());root.addView(generate);
         Button next=button("Další téma");next.setOnClickListener(v->{if(!stories.isEmpty()){current=(current+1)%stories.size();render();}});root.addView(next);
         contentArea=new LinearLayout(this);contentArea.setOrientation(1);
@@ -148,6 +152,45 @@ public class MainActivity extends Activity {
         NodeList nodes=e.getElementsByTagName(tag);
         return nodes.getLength()>0?nodes.item(0).getTextContent().trim():"";
     }
+    private void configureAi(){
+        EditText input=new EditText(this);
+        input.setSingleLine(true);
+        input.setText(getPreferences(0).getString("ai_endpoint",""));
+        input.setHint("https://tvuj-server.cz/generate");
+        new android.app.AlertDialog.Builder(this).setTitle("AI server (HTTPS)")
+          .setMessage("Volitelné: vlastní server, který přijímá JSON {topic,headline} a vrací JSON {text}. API klíč patří pouze na server, nikdy do APK.")
+          .setView(input).setNegativeButton("Zrušit",null)
+          .setPositiveButton("Uložit",(d,w)->{
+              String url=input.getText().toString().trim();
+              if(url.isEmpty()||url.startsWith("https://"))getPreferences(0).edit().putString("ai_endpoint",url).apply();
+              else status.setText("AI server musí používat HTTPS.");
+          }).show();
+    }
+    private void requestAi(Story story){
+        String endpoint=getPreferences(0).getString("ai_endpoint","");
+        if(!endpoint.startsWith("https://")){status.setText("Pro skutečnou AI nastav nejdřív vlastní HTTPS server.");return;}
+        status.setText("AI připravuje originální rozhovor…");
+        new Thread(()->{
+            String result="";
+            try{
+                HttpURLConnection conn=(HttpURLConnection)new URL(endpoint).openConnection();
+                conn.setRequestMethod("POST");conn.setConnectTimeout(9000);conn.setReadTimeout(15000);
+                conn.setDoOutput(true);conn.setRequestProperty("Content-Type","application/json; charset=utf-8");
+                JSONObject payload=new JSONObject();
+                payload.put("topic",story.category);payload.put("headline",story.title);
+                payload.put("instruction","Česky vytvoř zajímavou otázku pro Niki, dvě navazující otázky a stručné vysvětlení. Nevymýšlej fakta o aktuálních zprávách.");
+                try(OutputStream out=conn.getOutputStream()){out.write(payload.toString().getBytes("UTF-8"));}
+                if(conn.getResponseCode()!=200)throw new Exception("HTTP "+conn.getResponseCode());
+                ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+                try(InputStream in=conn.getInputStream()){byte[] buf=new byte[4096];int n;while((n=in.read(buf))!=-1){bytes.write(buf,0,n);if(bytes.size()>100000)throw new Exception("Odpověď je příliš dlouhá");}}
+                result=new JSONObject(bytes.toString("UTF-8")).optString("text","");
+                if(result.isEmpty())throw new Exception("Chybí pole text");
+                conn.disconnect();
+            }catch(Exception e){result="AI server neodpověděl: "+e.getMessage();}
+            final String message=result;
+            runOnUiThread(()->{status.setText("AI odpověď");contentArea.addView(text(message,16,Color.rgb(205,205,205)));});
+        }).start();
+    }
     private void generateIdea(){
         // On-device topic generator: no network, key or invented factual news.
         String[][] beginnings={
@@ -186,6 +229,7 @@ public class MainActivity extends Activity {
             open.setOnClickListener(v->{try{startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse(s.url)));}catch(Exception ignored){}});
             contentArea.addView(open);
         }
+        Button ai=button("AI • rozpracovat rozhovor");ai.setOnClickListener(v->requestAi(s));contentArea.addView(ai);
         Button favorite=button(liked.contains(s.category)?"♥ Zajímavé":"♡ Tohle Niki zajímá");
         favorite.setOnClickListener(v->{liked.add(s.category);getPreferences(0).edit().putStringSet("liked",new HashSet<>(liked)).apply();render();});
         contentArea.addView(favorite);
