@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.content.res.ColorStateList;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.*;
@@ -62,7 +64,7 @@ public class MainActivity extends Activity {
     }
     private Button button(String title){
         Button b=new Button(this);b.setText(title);b.setAllCaps(false);
-        b.setTextColor(INK);b.setTextSize(14);b.setBackground(background());
+        b.setTextColor(Color.rgb(195,195,195));b.setTextSize(14);b.setBackgroundTintList(ColorStateList.valueOf(Color.rgb(25,25,25)));b.setBackground(background());
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,54);lp.topMargin=10;b.setLayoutParams(lp);return b;
     }
     private void setup(){
@@ -105,9 +107,9 @@ public class MainActivity extends Activity {
                             c.setRequestProperty("User-Agent","Mozilla/5.0 (compatible; NikinkaWOW/1.1)");
                             try(InputStream stream=c.getInputStream()){
                                 DocumentBuilderFactory factory=DocumentBuilderFactory.newInstance();
-                                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl",true);
-                                factory.setFeature("http://xml.org/sax/features/external-general-entities",false);
-                                factory.setFeature("http://xml.org/sax/features/external-parameter-entities",false);
+                                factory.setExpandEntityReferences(false);
+                                try { factory.setFeature("http://xml.org/sax/features/external-general-entities",false); } catch(Exception ignored) {}
+                                try { factory.setFeature("http://xml.org/sax/features/external-parameter-entities",false); } catch(Exception ignored) {}
                                 Document doc=factory.newDocumentBuilder().parse(stream);
                                 NodeList items=doc.getElementsByTagName("item");
                                 for(int j=0;j<Math.min(items.getLength(),4);j++){
@@ -117,7 +119,7 @@ public class MainActivity extends Activity {
                                         found.add(new Story(title,link,prompts[i]));
                                 }
                             }finally{c.disconnect();}
-                            if(!found.isEmpty())break;
+                            if(items.getLength()>0)break;
                         }catch(Exception e){lastError=e.getClass().getSimpleName()+": "+e.getMessage();}
                     }
                 }catch(Exception e){lastError=e.getClass().getSimpleName();}
@@ -125,7 +127,7 @@ public class MainActivity extends Activity {
             final String error=lastError;
             runOnUiThread(()->{
                 if(found.isEmpty()){
-                    status.setText("Online zprávy nedostupné. Zůstávají připravená témata. "+error);
+                    status.setText("Online zprávy momentálně nedostupné. Zobrazena připravená témata.");
                 }else{
                     HashSet<String> unique=new HashSet<>();ArrayList<Story> clean=new ArrayList<>();
                     for(Story s:found)if(unique.add(s.title))clean.add(s);
