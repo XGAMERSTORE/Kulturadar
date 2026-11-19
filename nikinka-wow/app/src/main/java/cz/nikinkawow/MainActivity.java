@@ -79,7 +79,7 @@ public class MainActivity extends Activity {
         root.addView(text("Téma na dnešek",25,Color.rgb(190,190,190)));
         status=text("Načítám internetové novinky…",12,DIM);root.addView(status);
         Button update=button("Obnovit novinky");update.setOnClickListener(v->refresh());root.addView(update);
-        Button aiSettings=button("AI • nastavit zabezpečený server");aiSettings.setOnClickListener(v->configureAi());root.addView(aiSettings);
+        Button chat=button("Offline asistent • povídat si");chat.setOnClickListener(v->openChat());root.addView(chat);
         Button generate=button("Vygenerovat nové téma");generate.setOnClickListener(v->generateIdea());root.addView(generate);
         Button next=button("Další téma");next.setOnClickListener(v->{if(!stories.isEmpty()){current=(current+1)%stories.size();render();}});root.addView(next);
         contentArea=new LinearLayout(this);contentArea.setOrientation(1);
@@ -151,6 +151,81 @@ public class MainActivity extends Activity {
     private static String value(Element e,String tag){
         NodeList nodes=e.getElementsByTagName(tag);
         return nodes.getLength()>0?nodes.item(0).getTextContent().trim():"";
+    }
+    private void openChatWithTopic(Story story){
+        getPreferences(0).edit().putString("chat_topic",story.title).apply();
+        openChat();
+    }
+    private void openChat(){
+        final LinearLayout panel=new LinearLayout(this);panel.setOrientation(1);panel.setPadding(20,12,20,12);panel.setBackgroundColor(Color.BLACK);
+        final ScrollView scroll=new ScrollView(this);final LinearLayout transcript=new LinearLayout(this);transcript.setOrientation(1);
+        scroll.addView(transcript);
+        LinearLayout.LayoutParams scrollLp=new LinearLayout.LayoutParams(-1,0,1);panel.addView(scroll,scrollLp);
+        final EditText input=new EditText(this);input.setSingleLine(false);input.setMinLines(2);input.setMaxLines(4);
+        input.setTextColor(Color.WHITE);input.setHintTextColor(0xff888888);input.setHint("Napiš, co Niki bavilo, nebo se na něco zeptej…");
+        panel.addView(input);
+        Button send=button("Odeslat");panel.addView(send);
+        final android.app.Dialog dialog=new android.app.Dialog(this,android.R.style.Theme_Material_NoActionBar_Fullscreen);
+        dialog.setContentView(panel);
+        String topic=getPreferences(0).getString("chat_topic","");
+        transcript.addView(text("OFFLINE ASISTENT • soukromá paměť telefonu",13,0xffaaaaaa));
+        transcript.addView(text("Jsem jednoduchý lokální konverzační asistent. Učím se z tvých hodnocení a poznámek, ale nejsem velký jazykový model. "+(topic.isEmpty()?"O čem chceš mluvit?":"Můžeme rozebrat: "+topic),15,0xffcccccc));
+        String saved=getPreferences(0).getString("chat_history","");
+        if(!saved.isEmpty())transcript.addView(text(saved,13,0xffaaaaaa));
+        send.setOnClickListener(v->{
+            String msg=input.getText().toString().trim();if(msg.isEmpty())return;
+            input.setText("");
+            String answer=offlineReply(msg);
+            transcript.addView(text("TY: "+msg+"\\n\\nASISTENT: "+answer,15,0xffdddddd));
+            String history=getPreferences(0).getString("chat_history","");
+            history+=(history.isEmpty()?"":"\\n")+"TY: "+msg+"\\nASISTENT: "+answer+"\\n";
+            if(history.length()>12000)history=history.substring(history.length()-12000);
+            getPreferences(0).edit().putString("chat_history",history).apply();
+            scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
+        });
+        Button close=button("Zavřít");close.setOnClickListener(v->dialog.dismiss());panel.addView(close);
+        dialog.show();
+    }
+    private String offlineReply(String message){
+        String lower=message.toLowerCase(Locale.ROOT);
+        if(lower.startsWith("zapamatuj")||lower.startsWith("niki má ráda")||lower.startsWith("niki miluje")||lower.startsWith("niki nemá ráda")){
+            String memory=getPreferences(0).getString("chat_memory","");
+            memory+=(memory.isEmpty()?"":"\\n")+message;
+            if(memory.length()>6000)memory=memory.substring(memory.length()-6000);
+            getPreferences(0).edit().putString("chat_memory",memory).apply();
+            return "Uloženo jen do tohoto telefonu. Můžeš mi napsat další postřeh nebo požádat o téma.";
+        }
+        if(lower.contains("co si pamatuješ")||lower.contains("co víš o niki")){
+            String memory=getPreferences(0).getString("chat_memory","");
+            return memory.isEmpty()?"Zatím mám jen základní oblasti: knihy, hudbu, muzikály, fantasy a cestování. Napiš například: Zapamatuj si, že Niki miluje…":"Z tvých poznámek si pamatuji:\\n"+memory;
+        }
+        if(lower.contains("smaž paměť")||lower.contains("zapomeň vše")){
+            getPreferences(0).edit().remove("chat_memory").remove("chat_history").apply();
+            return "Lokální poznámky a uložená historie byly vymazány.";
+        }
+        String[] categories={"hudb","nightwish","tarj","knih","poe","muzik","rebecca","cest","skots","fantasy","film","orchidej","kon"};
+        String[] suggestions={
+            "Co kdybys jí pustil jednu skladbu a zeptal se, jakou vzpomínku jí připomíná?",
+            "Zeptej se, který moment z Nightwish by chtěla slyšet živě ještě jednou.",
+            "Co ji na Tarjině hlase nejvíc fascinuje – barva, síla, nebo emoce?",
+            "Která kniha ji překvapila koncem a proč?",
+            "Jaký nový případ by podle ní Poe a Tilly zvládli nejlépe?",
+            "Který muzikál by chtěla vidět ze zákulisí?",
+            "Co pro ni dělá Rebeccu tak výjimečnou?",
+            "Jak by vypadal její ideální výlet bez omezení rozpočtem?",
+            "Které místo ve Skotsku by chtěla vidět jako první?",
+            "V jakém fantasy světě by chtěla jeden den žít?",
+            "Který film by chtěla vidět znovu poprvé?",
+            "Kterou neobvyklou orchidej by chtěla pěstovat?",
+            "Chtěla by si radši vyzkoušet jízdu na koni v horách, nebo na pláži?"
+        };
+        for(int i=0;i<categories.length;i++)if(lower.contains(categories[i]))return suggestions[i]+" A co na to říkáš ty?";
+        String memory=getPreferences(0).getString("chat_memory","");
+        if(lower.contains("téma")||lower.contains("nápad")||lower.contains("otázk")){
+            int index=new Random().nextInt(questions.length);
+            return questions[index]+(memory.isEmpty()?"":"\\nPřipomínám také tvoji poznámku: "+memory.split("\\n")[0]);
+        }
+        return "Rozumím. Můžeš mi říct, co Niki na tom zaujalo? Potom mi napiš „zapamatuj si…“, nebo „dej téma“. Offline zatím zvládám jen omezený okruh odpovědí.";
     }
     private void configureAi(){
         EditText input=new EditText(this);
@@ -229,7 +304,7 @@ public class MainActivity extends Activity {
             open.setOnClickListener(v->{try{startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse(s.url)));}catch(Exception ignored){}});
             contentArea.addView(open);
         }
-        Button ai=button("AI • rozpracovat rozhovor");ai.setOnClickListener(v->requestAi(s));contentArea.addView(ai);
+        Button ai=button("Rozpracovat téma offline");ai.setOnClickListener(v->openChatWithTopic(s));contentArea.addView(ai);
         Button favorite=button(liked.contains(s.category)?"♥ Zajímavé":"♡ Tohle Niki zajímá");
         favorite.setOnClickListener(v->{liked.add(s.category);getPreferences(0).edit().putStringSet("liked",new HashSet<>(liked)).apply();render();});
         contentArea.addView(favorite);
