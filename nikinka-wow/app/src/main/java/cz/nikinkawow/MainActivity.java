@@ -40,6 +40,7 @@ public class MainActivity extends Activity {
     private final String[] prompts={"Hudba","Detektivky","Muzikály","Fantasy","Cestování","Knihy","Příroda","Historie","Koně","Filmy"};
     private final HashSet<String> liked=new HashSet<>();
     private int current=0;
+    private int ideaNumber=0;
     static class Story {
         final String title,url,category;
         Story(String t,String u,String c){title=t;url=u;category=c;}
@@ -75,6 +76,7 @@ public class MainActivity extends Activity {
         root.addView(text("Téma na dnešek",25,Color.rgb(190,190,190)));
         status=text("Načítám internetové novinky…",12,DIM);root.addView(status);
         Button update=button("Obnovit novinky");update.setOnClickListener(v->refresh());root.addView(update);
+        Button generate=button("Vygenerovat nové téma");generate.setOnClickListener(v->generateIdea());root.addView(generate);
         Button next=button("Další téma");next.setOnClickListener(v->{if(!stories.isEmpty()){current=(current+1)%stories.size();render();}});root.addView(next);
         contentArea=new LinearLayout(this);contentArea.setOrientation(1);
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=18;
@@ -119,7 +121,7 @@ public class MainActivity extends Activity {
                                         found.add(new Story(title,link,prompts[i]));
                                 }
                             }finally{c.disconnect();}
-                            if(items.getLength()>0)break;
+                            if(!found.isEmpty())break;
                         }catch(Exception e){lastError=e.getClass().getSimpleName()+": "+e.getMessage();}
                     }
                 }catch(Exception e){lastError=e.getClass().getSimpleName();}
@@ -146,12 +148,38 @@ public class MainActivity extends Activity {
         NodeList nodes=e.getElementsByTagName(tag);
         return nodes.getLength()>0?nodes.item(0).getTextContent().trim():"";
     }
+    private void generateIdea(){
+        // On-device topic generator: no network, key or invented factual news.
+        String[][] beginnings={
+            {"Kdybys mohla prožít jeden koncert Nightwish znovu, který by to byl?","Co bys změnila na koncertním setlistu Tarji?","Jaká píseň by podle tebe nejlépe vystihla náš výlet?"},
+            {"Který případ Washingtona Poea bys chtěla vyřešit s Tilly?","Jaký detail v detektivce ti nejčastěji prozradí pachatele?","Kdybys napsala vlastní krimi, kde by se odehrávala?"},
+            {"Kterou scénu z Rebeccy bys chtěla vidět ze zákulisí?","Který muzikál má podle tebe nejlepší hudební finále?","Jaký příběh by si zasloužil vlastní muzikál?"},
+            {"Kde ve Středozemi bys chtěla strávit jeden den?","Kterou fantasy postavu bys pozvala na čaj?","Jaká knižní adaptace se ti nejvíc povedla?"},
+            {"Jaké místo ve Skotsku bys chtěla objevit jako první?","Jak by vypadal náš ideální výlet bez pevného plánu?","Co bys chtěla poprvé zažít u moře?"},
+            {"Kterou fantasy knihu bys doporučila někomu, kdo nikdy nečetl fantasy?","Který knižní svět má podle tebe nejlepší pravidla magie?","Jakou knihu bys chtěla znovu číst úplně poprvé?"},
+            {"Jakou zvláštní květinu bys chtěla vidět naživo?","Kdybys měla vlastní zahradu orchidejí, jak by vypadala?","Jaká přírodní zajímavost tě naposledy překvapila?"},
+            {"Který muzejní exponát bys chtěla vidět zblízka?","Kdybys mohla odhalit jednu historickou záhadu, jakou?","Do jakého období historie by ses podívala na jediný den?"},
+            {"Jaký zážitek s koňmi by sis chtěla splnit?","Jaké zvíře tě fascinuje svou inteligencí?","Kdybys mohla navštívit jednu přírodní rezervaci, jakou?"},
+            {"Který film bys chtěla vidět poprvé znovu?","Který soundtrack je podle tebe lepší než samotný film?","Jaká filmová scéna tě pokaždé dojme?"}
+        };
+        Random random=new Random(System.nanoTime());
+        int category=random.nextInt(prompts.length);
+        if(!liked.isEmpty()&&random.nextInt(100)<65){
+            ArrayList<Integer> fav=new ArrayList<>();
+            for(int i=0;i<prompts.length;i++)if(liked.contains(prompts[i]))fav.add(i);
+            if(!fav.isEmpty())category=fav.get(random.nextInt(fav.size()));
+        }
+        String generated=beginnings[category][random.nextInt(beginnings[category].length)];
+        stories.add(0,new Story(generated,"",prompts[category]));
+        current=0;ideaNumber++;status.setText("Nový nápad č. "+ideaNumber+" • vytvořený v telefonu bez internetu");
+        render();
+    }
     private void render(){
         if(contentArea==null||stories.isEmpty())return;
         contentArea.removeAllViews();Story s=stories.get(current);
         contentArea.addView(text(s.category.toUpperCase(Locale.ROOT),11,DIM));
         contentArea.addView(text(s.title,20,Color.rgb(200,200,200)));
-        String question=s.url.isEmpty()?"Tohle je připravené konverzační téma.":"Co tě na téhle novince nejvíc překvapilo? A co si o tom myslíš?";
+        String question=s.url.isEmpty()?"Zkus navázat otázkou: Co by sis vybrala ty a proč?":"Našel jsem k tomu zajímavou novinku. Co tě na ní nejvíc překvapilo?";
         contentArea.addView(text(question,14,INK));
         if(!s.url.isEmpty()){
             Button open=button("Otevřít zdroj");
